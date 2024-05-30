@@ -189,6 +189,49 @@ def authenticate_admin_user(username, password):
 
 
 
+
+
+
+@app.route('/updateStatus', methods=['POST'])
+def update_status():
+    data = request.get_json()
+    username = data.get('username')
+    status = data.get('status')
+    
+    connection = mysql.connector.connect(**db_config)
+    cursor = connection.cursor()
+    
+    # Check if the user exists
+    query_get_id = "SELECT idusers FROM users WHERE Username = %s"
+    cursor.execute(query_get_id, (username,))
+    user_id = cursor.fetchone()
+
+    if user_id:
+        user_id = user_id[0]
+        
+        # Update the user's status and last_activity_at
+        query_update_status = """
+            UPDATE users 
+            SET status = %s, last_activity_at = NOW() 
+            WHERE idusers = %s
+        """
+        cursor.execute(query_update_status, (status, user_id))
+        connection.commit()
+        
+        cursor.close()
+        connection.close()
+        
+        return jsonify({'message': 'User status and activity updated successfully'}), 200
+    else:
+        cursor.close()
+        connection.close()
+        return jsonify({'message': 'User not found'}), 404
+
+
+
+
+
+
 @app.route('/free-mechanics', methods=['GET', 'POST'])
 @cross_origin(supports_credentials=True)
 
@@ -275,26 +318,53 @@ def insert_tasks():
     date = data.get('date')
     model = data.get('model')  # Extract model from the request
     matricule = data.get('matricule')
-    print("Received date:", date) 
+    tasktype = data.get('tasktype')  # Ensure tasktype is correctly extracted
+    print("Received date:", date)
+    print("Received tasktype:", tasktype)  # Debug line to ensure tasktype is received
+
     try:
         # Connect to the database
         connection = mysql.connector.connect(**db_config)
         cursor = connection.cursor()
-        date_form =datetime.strptime(date, '%Y-%m-%d')
+        date_form = datetime.strptime(date, '%Y-%m-%d')
         next_day = date_form + timedelta(days=1)
-        next_day_str = next_day.strftime('%Y-%m-%d') 
-            # Insert tasks into the mecano_tasks table
-        query = """
-        INSERT INTO mecano_tasks (id_mecano, tasks, model, matricule, date)
-        VALUES (%s, %s, %s, %s, %s)
+        next_day_str = next_day.strftime('%Y-%m-%d')
+        
+        # Insert tasks into the mecano_tasks table
+        insert_task_query = """
+        INSERT INTO mecano_tasks (id_mecano, tasks, model, matricule, task_type, date)
+        VALUES (%s, %s, %s, %s, %s, %s)
         """
-        cursor.execute(query, (id_mecano, tasks, model, matricule, next_day_str))   
+        cursor.execute(insert_task_query, (id_mecano, tasks, model, matricule, tasktype, next_day_str))
+        
+        # Update the truck status and next maintenance date based on the task type
+        if tasktype == 'reparation':
+            update_truck_status_query = """
+            UPDATE trucks
+            SET status = 'en panne'
+            WHERE matricule = %s
+            """
+            cursor.execute(update_truck_status_query, (matricule,))
+        elif tasktype == 'maintenance':
+            update_truck_status_query = """
+            UPDATE trucks
+            SET status = 'maintenance', next_maintenance_date = %s
+            WHERE matricule = %s
+            """
+            cursor.execute(update_truck_status_query, (next_day_str, matricule,))
+        
         connection.commit()
 
-        return jsonify({'message': 'Tasks inserted successfully'})
+        cursor.close()
+        connection.close()
+
+        return jsonify({'message': 'Tasks inserted and truck status updated successfully'})
+
     except mysql.connector.Error as error:
         print("Error: {}".format(error))
-        return jsonify({'error': 'Failed to insert tasks'}), 500
+        return jsonify({'error': 'Failed to insert tasks and update truck status'}), 500
+
+
 
 
 
@@ -610,45 +680,33 @@ def add_car():
 @cross_origin(supports_credentials=True)
 def fetch_tasks_for_current_user_and_date():
     try:
-        # Log request information
         app.logger.info('Request Args: %s', request.args)
-
-        # Get the username from the request arguments
         username = request.args.get('username')
 
-        # Connect to the database
         connection = mysql.connector.connect(**db_config)
         cursor = connection.cursor()
 
-        # Get the current system date
         current_date = date.today().isoformat()
 
-        # Fetch the user ID based on the username
         cursor.execute("SELECT id FROM mecano WHERE name = %s", (username,))
         user_id = cursor.fetchone()
 
         if not user_id:
             return jsonify({'error': 'User not found'}), 404
 
-        # SQL query to fetch tasks for the current user and date
         query = """
-        SELECT tasks, model,matricule
+        SELECT tasks, model, matricule, task_type
         FROM mecano_tasks
         WHERE id_mecano = %s AND date = %s 
         """
-
         cursor.execute(query, (user_id[0], current_date))
         print("Executed SQL query:", cursor.statement)
 
-        # Fetch all rows
         tasks = cursor.fetchall()
-
-        # Close cursor and connection
         cursor.close()
         connection.close()
 
-        # Return the fetched tasks as JSON response
-        return jsonify({'tasks': [{'task': task[0], 'model': task[1], 'matricule': task[2]} for task in tasks]})
+        return jsonify({'tasks': [{'task': task[0], 'model': task[1], 'matricule': task[2], 'taskType': task[3]} for task in tasks]})
 
     except mysql.connector.Error as error:
         return jsonify({'error': str(error)}), 500
@@ -694,20 +752,78 @@ def get_pending_tasks():
         connection = mysql.connector.connect(**db_config)
         cursor = connection.cursor()
 
-        cursor.execute("SELECT mecano.name, mecano_tasks.tasks FROM mecano_tasks JOIN mecano ON mecano.id = mecano_tasks.id_mecano WHERE mecano_tasks.done = 'pending_confirmation'")
+        cursor.execute("""
+            SELECT mecano.name, mecano_tasks.tasks, mecano_tasks.matricule, mecano_tasks.task_type 
+            FROM mecano_tasks 
+            JOIN mecano ON mecano.id = mecano_tasks.id_mecano 
+            WHERE mecano_tasks.done = 'pending_confirmation'
+        """)
         tasks = cursor.fetchall()
 
-        task_list = [{'mechanic': task[0], 'task': task[1]} for task in tasks]
+        task_list = [{'mechanic': task[0], 'task': task[1], 'matricule': task[2], 'taskType': task[3]} for task in tasks]
 
         cursor.close()
         connection.close()
-
+        print(task_list)
         return jsonify({'tasks': task_list}), 200
 
     except mysql.connector.Error as error:
         return jsonify({'error': str(error)}), 500
 
 
+
+@app.route('/confirm_task', methods=['POST'])
+@cross_origin(supports_credentials=True)
+def confirm_task():
+    task_name = request.form.get('taskName')
+    matricule = request.form.get('matricule')
+    task_type = request.form.get('taskType')
+
+    try:
+        # Connect to the database
+        connection = mysql.connector.connect(**db_config)
+        cursor = connection.cursor()
+
+        # Update the task status in the database
+        query = """
+        UPDATE mecano_tasks
+        SET done = 'yes'
+        WHERE tasks = %s
+        """
+        cursor.execute(query, (task_name,))
+        connection.commit()
+        
+        # Update the truck status and maintenance/reparation dates based on task type
+        if task_type == 'maintenance':
+            query2 = """
+            UPDATE trucks 
+            SET status = 'dispo', last_maintenance_date = CURDATE()
+            WHERE matricule = %s
+            """
+        elif task_type == 'reparation':
+            query2 = """
+            UPDATE trucks 
+            SET status = 'dispo', last_repared_at = CURDATE()
+            WHERE matricule = %s
+            """
+        else:
+            query2 = """
+            UPDATE trucks 
+            SET status = 'dispo'
+            WHERE matricule = %s
+            """
+        
+        cursor.execute(query2, (matricule,))
+        connection.commit()
+
+        cursor.close()
+        connection.close()
+
+        return jsonify({'message': 'Task confirmed successfully'})
+
+    except Exception as error:
+        print("Error: {}".format(error))
+        return jsonify({'error': 'Failed to confirm task'}), 500
 
 
 
@@ -793,7 +909,8 @@ WHERE
         WHERE date != %s
     )) 
     AND 
-    type = %s;
+    type = %s
+    AND status= 'dispo';
         """
         cursor.execute(query, (next_day_str, next_day_str, truck_type))
         free_trucks = [{'matricule': row[0], 'type': row[1]} for row in cursor.fetchall()]
@@ -1168,10 +1285,12 @@ def get_profile():
     
     
 @app.route('/report', methods=['POST'])
-@cross_origin(supports_credentials=True) 
+@cross_origin(supports_credentials=True)
 def save_report():
-    title = request.form.get('title')
-    content = request.form.get('content')
+    vehicle_id = request.form.get('vehicleId')
+    issue_description = request.form.get('issueDescription')
+    work_description = request.form.get('workDescription')
+    signature = request.form.get('signature')
     username = request.form.get('username')
 
     try:
@@ -1186,12 +1305,12 @@ def save_report():
         cursor.execute(query_mecano, (username,))
         mecano_id = cursor.fetchone()[0]  # Assuming it returns a single ID
 
-        # Insert the report data into the reports table
+        # Insert the report data into the mecano_reports table
         query = """
-        INSERT INTO mecano_reports (`id-trucks`, `id-mecano`, `username`, `report`)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO mecano_reports (`id-trucks`, `id-mecano`, `username`, `issue_description`, `work_description`, `signature`)
+        VALUES (%s, %s, %s, %s, %s, %s)
         """
-        cursor.execute(query, (title    , mecano_id, username, content))
+        cursor.execute(query, (vehicle_id, mecano_id, username, issue_description, work_description, signature))
         connection.commit()
 
         cursor.close()
@@ -1203,7 +1322,6 @@ def save_report():
         print("Error: {}".format(error))
         return jsonify({'error': 'Failed to save report'}), 500
 
-  
     
   
 
@@ -1699,6 +1817,135 @@ def get_destination_counts():
         cursor.close()
         connection.close()
         return jsonify({'message': 'User not found'}), 404
+#--------------------------------------------------------- DASHBOARD --------------------------------------------------------
+import pandas as pd
+
+def execute_query(query):
+    connection = mysql.connector.connect(**db_config)
+    cursor = connection.cursor()
+    cursor.execute(query)
+    columns = [col[0] for col in cursor.description]
+    results = cursor.fetchall()
+    cursor.close()
+    connection.close()
+    return pd.DataFrame(results, columns=columns)
+
+@app.route('/total_users', methods=['GET'])
+@cross_origin(supports_credentials=True)
+
+def total_users():
+    query = "SELECT COUNT(*) as total FROM users WHERE status = 'active'"
+    result = execute_query(query)
+    return jsonify(result.to_dict(orient='records'))
+
+@app.route('/new_users', methods=['GET'])
+@cross_origin(supports_credentials=True)
+
+def new_users():
+    query = """
+    SELECT COUNT(*) as new_users FROM users 
+    WHERE status = 'active' 
+    """
+    result = execute_query(query)
+    return jsonify(result.to_dict(orient='records'))
+
+@app.route('/user_activity', methods=['GET'])
+@cross_origin(supports_credentials=True)
+
+def user_activity():
+    query = """
+    SELECT DATE(created_at) as date, COUNT(*) as count 
+    FROM users 
+    WHERE status = 'active'
+    GROUP BY DATE(created_at)
+    ORDER BY DATE(created_at) DESC
+    """
+    result = execute_query(query)
+    return jsonify(result.to_dict(orient='records'))
+
+@app.route('/total_vehicles', methods=['GET'])
+@cross_origin(supports_credentials=True)
+
+def total_vehicles():
+    query = "SELECT COUNT(*) as total FROM trucks"
+    result = execute_query(query)
+    return jsonify(result.to_dict(orient='records'))
+
+@app.route('/vehicle_status', methods=['GET'])
+@cross_origin(supports_credentials=True)
+
+def vehicle_status():
+    query = """
+    SELECT status, COUNT(*) as count 
+    FROM trucks
+    GROUP BY status
+    """
+    result = execute_query(query)
+    return jsonify(result.to_dict(orient='records'))
+
+@app.route('/total_tasks', methods=['GET'])
+@cross_origin(supports_credentials=True)
+
+def total_tasks():
+    query = "SELECT COUNT(*) as total FROM mecano_tasks"
+    result = execute_query(query)
+    return jsonify(result.to_dict(orient='records'))
+
+@app.route('/task_status', methods=['GET'])
+@cross_origin(supports_credentials=True)
+
+def task_status():
+    query = """
+    SELECT done, COUNT(*) as count 
+    FROM mecano_tasks
+    GROUP BY done
+    """
+    result = execute_query(query)
+    return jsonify(result.to_dict(orient='records'))
+
+@app.route('/task_completion_rate', methods=['GET'])
+@cross_origin(supports_credentials=True)
+def task_completion_rate():
+    query = """
+    SELECT DATE(date) as date, COUNT(*) as count 
+    FROM mecano_tasks
+    WHERE done = 'yes'
+    GROUP BY DATE(date)
+    ORDER BY DATE(date) DESC
+    """
+    result = execute_query(query)
+    return jsonify(result.to_dict(orient='records'))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1717,4 +1964,4 @@ def get_destination_counts():
 
 
 if __name__ == '__main__':
-    app.run(host='192.168.1.167', port=5001, debug=True)
+    app.run(host='192.168.1.127', port=5001, debug=True)

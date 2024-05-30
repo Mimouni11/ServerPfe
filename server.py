@@ -18,6 +18,8 @@ from email.mime.base import MIMEBase
 from email import encoders
 import os
 from collections import defaultdict
+import subprocess
+
 
 app = Flask(__name__)
 CORS(app, origins=['http://192.168.1.172:3000'], supports_credentials=True)  # Allow CORS with credentials
@@ -70,6 +72,12 @@ def send_email(receiver_email, subject, message_body, attachment_path=None):
     except Exception as e:
         print("Error sending email:", e)
         return False
+
+
+
+
+
+
 
 
 @app.route('/add_user', methods=['POST'])
@@ -1819,103 +1827,132 @@ def get_destination_counts():
         return jsonify({'message': 'User not found'}), 404
 #--------------------------------------------------------- DASHBOARD --------------------------------------------------------
 import pandas as pd
-
-def execute_query(query):
-    connection = mysql.connector.connect(**db_config)
-    cursor = connection.cursor()
-    cursor.execute(query)
-    columns = [col[0] for col in cursor.description]
-    results = cursor.fetchall()
-    cursor.close()
-    connection.close()
-    return pd.DataFrame(results, columns=columns)
+from sqlalchemy import create_engine
+# Create a SQLAlchemy engine
+def create_engine_db(db_name=None):
+    user = 'me'
+    password = '0000'
+    host = 'localhost'
+    if db_name:
+        url = f'mysql+mysqlconnector://{user}:{password}@{host}/{db_name}'
+    else:
+        url = f'mysql+mysqlconnector://{user}:{password}@{host}'
+    return create_engine(url)
 
 @app.route('/total_users', methods=['GET'])
 @cross_origin(supports_credentials=True)
 
-def total_users():
-    query = "SELECT COUNT(*) as total FROM users WHERE status = 'active'"
-    result = execute_query(query)
-    return jsonify(result.to_dict(orient='records'))
+def get_total_users():
+    engine = create_engine_db('sawekji2')
+    query = "SELECT COUNT(*) AS total FROM DimUsers"
+    data = pd.read_sql(query, engine)
+    return jsonify(data.to_dict(orient='records'))
 
 @app.route('/new_users', methods=['GET'])
 @cross_origin(supports_credentials=True)
 
-def new_users():
-    query = """
-    SELECT COUNT(*) as new_users FROM users 
-    WHERE status = 'active' 
-    """
-    result = execute_query(query)
-    return jsonify(result.to_dict(orient='records'))
+def get_new_users():
+    engine = create_engine_db('sawekji2')
+    query = "SELECT COUNT(*) AS new_users FROM DimUsers WHERE DATE(hire_date) = CURDATE()"
+    data = pd.read_sql(query, engine)
+    return jsonify(data.to_dict(orient='records'))
 
 @app.route('/user_activity', methods=['GET'])
 @cross_origin(supports_credentials=True)
 
-def user_activity():
+def get_user_activity():
+    engine = create_engine_db('sawekji2')
     query = """
-    SELECT DATE(created_at) as date, COUNT(*) as count 
-    FROM users 
-    WHERE status = 'active'
-    GROUP BY DATE(created_at)
-    ORDER BY DATE(created_at) DESC
+    SELECT DATE(task_date) as date, COUNT(*) as count 
+    FROM FactDriverTasks 
+    GROUP BY DATE(task_date)
+    UNION ALL
+    SELECT DATE(repair_date) as date, COUNT(*) as count 
+    FROM FactMecanoTasks 
+    GROUP BY DATE(repair_date)
     """
-    result = execute_query(query)
-    return jsonify(result.to_dict(orient='records'))
+    data = pd.read_sql(query, engine)
+    return jsonify(data.to_dict(orient='records'))
 
 @app.route('/total_vehicles', methods=['GET'])
 @cross_origin(supports_credentials=True)
 
-def total_vehicles():
-    query = "SELECT COUNT(*) as total FROM trucks"
-    result = execute_query(query)
-    return jsonify(result.to_dict(orient='records'))
+def get_total_vehicles():
+    engine = create_engine_db('sawekji2')
+    query = "SELECT COUNT(*) AS total FROM DimVehicles"
+    data = pd.read_sql(query, engine)
+    return jsonify(data.to_dict(orient='records'))
 
 @app.route('/vehicle_status', methods=['GET'])
 @cross_origin(supports_credentials=True)
 
-def vehicle_status():
+def get_vehicle_status():
+    engine = create_engine_db('sawekji2')
     query = """
-    SELECT status, COUNT(*) as count 
-    FROM trucks
+    SELECT 
+        CASE 
+            WHEN next_maintenance_date < CURDATE() THEN 'Operational' 
+            ELSE 'Due maintenance' 
+        END AS status, 
+        COUNT(*) AS count 
+    FROM DimVehicles 
     GROUP BY status
     """
-    result = execute_query(query)
-    return jsonify(result.to_dict(orient='records'))
+    data = pd.read_sql(query, engine)
+    return jsonify(data.to_dict(orient='records'))
 
 @app.route('/total_tasks', methods=['GET'])
 @cross_origin(supports_credentials=True)
 
-def total_tasks():
-    query = "SELECT COUNT(*) as total FROM mecano_tasks"
-    result = execute_query(query)
-    return jsonify(result.to_dict(orient='records'))
+def get_total_tasks():
+    engine = create_engine_db('sawekji2')
+    query = "SELECT COUNT(*) AS total FROM FactDriverTasks"
+    data = pd.read_sql(query, engine)
+    return jsonify(data.to_dict(orient='records'))
 
 @app.route('/task_status', methods=['GET'])
 @cross_origin(supports_credentials=True)
 
-def task_status():
+def get_task_status():
+    engine = create_engine_db('sawekji2')
     query = """
-    SELECT done, COUNT(*) as count 
-    FROM mecano_tasks
+    SELECT 
+        CASE 
+            WHEN task_date <= CURDATE() THEN 'yes' 
+            ELSE 'no' 
+        END AS done, 
+        COUNT(*) AS count 
+    FROM FactDriverTasks 
     GROUP BY done
     """
-    result = execute_query(query)
-    return jsonify(result.to_dict(orient='records'))
+    data = pd.read_sql(query, engine)
+    return jsonify(data.to_dict(orient='records'))
 
 @app.route('/task_completion_rate', methods=['GET'])
 @cross_origin(supports_credentials=True)
-def task_completion_rate():
-    query = """
-    SELECT DATE(date) as date, COUNT(*) as count 
-    FROM mecano_tasks
-    WHERE done = 'yes'
-    GROUP BY DATE(date)
-    ORDER BY DATE(date) DESC
-    """
-    result = execute_query(query)
-    return jsonify(result.to_dict(orient='records'))
 
+def get_task_completion_rate():
+    engine = create_engine_db('sawekji2')
+    query = """
+    SELECT DATE(task_date) as date, COUNT(*) as count 
+    FROM FactDriverTasks 
+    WHERE task_date <= CURDATE()
+    GROUP BY DATE(task_date)
+    """
+    data = pd.read_sql(query, engine)
+    return jsonify(data.to_dict(orient='records'))
+
+
+@app.route('/run_etl', methods=['POST'])
+@cross_origin(supports_credentials=True)
+
+def run_etl():
+    try:
+        # Assuming your ETL script is named `etl_script.py` and located in the same directory
+        subprocess.run(["python", "warehouse.py"], check=True)
+        return jsonify({"status": "success", "message": "ETL process completed successfully."})
+    except subprocess.CalledProcessError as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 

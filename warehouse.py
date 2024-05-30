@@ -62,25 +62,48 @@ def transform_fact_driver_tasks(driver_tasks, rehla):
 
 def transform_fact_mecano_tasks(mecano_tasks):
     print("Transforming FactMecanoTasks...")
+    print(mecano_tasks.columns)  # Print columns to verify column names
     return mecano_tasks[['idmecano_tasks', 'id_mecano', 'matricule', 'date']].rename(columns={
         'idmecano_tasks': 'task_id',
+        'id_mecano': 'mecano_id',
         'matricule': 'vehicle_id',
         'date': 'repair_date'
     })
 
 def transform_fact_vehicle_maintenance(trucks, mecano_tasks):
     print("Transforming FactVehicleMaintenance...")
+
+    # Print the first few rows to understand the structure
+    print("Trucks DataFrame:")
+    print(trucks.head())
+
+    print("MecanoTasks DataFrame:")
+    print(mecano_tasks.head())
+
+    # Group by vehicle_id and count the number of maintenance tasks
     maintenance_count = mecano_tasks.groupby('matricule').size().reset_index(name='maintenance_count')
-    fact_vehicle_maintenance = trucks.merge(maintenance_count, left_on='matricule', right_on='matricule', how='left').fillna(0)
+    print("Maintenance Count DataFrame:")
+    print(maintenance_count.head())
+
+    # Merge trucks with maintenance counts
+    fact_vehicle_maintenance = trucks.merge(maintenance_count, left_on='matricule', right_on='matricule', how='left')
+    
+    # Handle NaNs
+    fact_vehicle_maintenance['maintenance_count'] = fact_vehicle_maintenance['maintenance_count'].fillna(0)
     fact_vehicle_maintenance['next_maintenance_date'] = fact_vehicle_maintenance['next_maintenance_date'].replace(0, pd.NaT)
     fact_vehicle_maintenance['last_maintenance_date'] = fact_vehicle_maintenance['last_maintenance_date'].replace(0, pd.NaT)
-    fact_vehicle_maintenance['last_repaired_date'] = fact_vehicle_maintenance['last_repared_at'].replace(0, pd.NaT)
+    fact_vehicle_maintenance['last_repared_at'] = fact_vehicle_maintenance['last_repared_at'].replace(0, pd.NaT)
+
+    print("FactVehicleMaintenance DataFrame after merge and handling NaNs:")
+    print(fact_vehicle_maintenance.head())
+
     return fact_vehicle_maintenance[['matricule', 'next_maintenance_date', 'last_maintenance_date', 'last_repared_at', 'maintenance_count']].rename(columns={
         'matricule': 'vehicle_id',
         'next_maintenance_date': 'next_maintenance_date',
         'last_maintenance_date': 'last_maintenance_date',
         'last_repared_at': 'last_repaired_date'
     })
+
 
 def generate_date_range(start_date, end_date):
     print(f"Generating date range from {start_date} to {end_date}")
@@ -192,27 +215,21 @@ def etl_process():
         max_date = max(driver_tasks['date'].max(), mecano_tasks['date'].max(), rehla['date'].max())
         dim_dates = generate_date_range(min_date, max_date)
 
-        # Connect to target database (data warehouse: sawekji2)
-        print("Connecting to target database...")
-        target_engine = create_engine_db('sawekji2')
+        # Connect to destination database (pfe_dw)
+        destination_engine = create_engine_db('sawekji2')
 
-        # Load data into the new data warehouse
-        print("Loading data into DimUsers...")
-        load_data(dim_users, 'DimUsers', target_engine)
-        print("Loading data into DimVehicles...")
-        load_data(dim_vehicles, 'DimVehicles', target_engine)
-        print("Loading data into FactDriverTasks...")
-        load_data(fact_driver_tasks, 'FactDriverTasks', target_engine)
-        print("Loading data into FactMecanoTasks...")
-        load_data(fact_mecano_tasks, 'FactMecanoTasks', target_engine)
-        print("Loading data into FactVehicleMaintenance...")
-        load_data(fact_vehicle_maintenance, 'FactVehicleMaintenance', target_engine)
-        print("Loading data into DimDates...")
-        load_data(dim_dates, 'DimDates', target_engine)
+        # Load data into destination database
+        load_data(dim_users, 'DimUsers', destination_engine)
+        load_data(dim_vehicles, 'DimVehicles', destination_engine)
+        load_data(fact_driver_tasks, 'FactDriverTasks', destination_engine)
+        load_data(fact_mecano_tasks, 'FactMecanoTasks', destination_engine)
+        load_data(fact_vehicle_maintenance, 'FactVehicleMaintenance', destination_engine)
+        load_data(dim_dates, 'DimDates', destination_engine)
 
         print("ETL process completed successfully.")
+
     except Exception as e:
         print(f"ETL process failed: {e}")
 
-# Execute the ETL process
+# Run the ETL process
 etl_process()

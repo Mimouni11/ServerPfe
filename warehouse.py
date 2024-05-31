@@ -62,13 +62,14 @@ def transform_fact_driver_tasks(driver_tasks, rehla):
 
 def transform_fact_mecano_tasks(mecano_tasks):
     print("Transforming FactMecanoTasks...")
-    print(mecano_tasks.columns)  # Print columns to verify column names
-    return mecano_tasks[['idmecano_tasks', 'id_mecano', 'matricule', 'date']].rename(columns={
+    return mecano_tasks[['idmecano_tasks', 'id_mecano', 'matricule', 'date', 'done']].rename(columns={
         'idmecano_tasks': 'task_id',
         'id_mecano': 'mecano_id',
         'matricule': 'vehicle_id',
-        'date': 'repair_date'
+        'date': 'repair_date',
+        'done': 'task_done'
     })
+
 
 def transform_fact_vehicle_maintenance(trucks, mecano_tasks):
     print("Transforming FactVehicleMaintenance...")
@@ -120,64 +121,66 @@ def generate_date_range(start_date, end_date):
 # Loading Function
 def load_data(df, table_name, engine):
     create_table_queries = {
-        'DimUsers': """
-            CREATE TABLE DimUsers (
-                user_id INT PRIMARY KEY,
-                username VARCHAR(255),
-                email VARCHAR(255),
-                role VARCHAR(255),
-                hire_date DATETIME
-            )
-        """,
-        'DimVehicles': """
-            CREATE TABLE DimVehicles (
-                vehicle_id VARCHAR(255) PRIMARY KEY,
-                model VARCHAR(255),
-                year INT,
-                type VARCHAR(255),
-                next_maintenance_date DATETIME,
-                last_maintenance_date DATETIME,
-                last_repaired_date DATETIME
-            )
-        """,
-        'FactDriverTasks': """
-            CREATE TABLE FactDriverTasks (
-                task_id VARCHAR(255) PRIMARY KEY,
-                driver_id INT,
-                vehicle_id VARCHAR(255),
-                task_date DATETIME,
-                km_covered FLOAT
-            )
-        """,
-        'FactMecanoTasks': """
-            CREATE TABLE FactMecanoTasks (
-                task_id VARCHAR(255) PRIMARY KEY,
-                mecano_id INT,
-                vehicle_id VARCHAR(255),
-                repair_date DATETIME
-            )
-        """,
-        'FactVehicleMaintenance': """
-            CREATE TABLE FactVehicleMaintenance (
-                vehicle_id VARCHAR(255) PRIMARY KEY,
-                next_maintenance_date DATETIME,
-                last_maintenance_date DATETIME,
-                last_repaired_date DATETIME,
-                maintenance_count INT
-            )
-        """,
-        'DimDates': """
-            CREATE TABLE DimDates (
-                date_key DATE PRIMARY KEY,
-                day INT,
-                month INT,
-                year INT,
-                quarter INT,
-                day_of_week INT,
-                day_name VARCHAR(255)
-            )
-        """
-    }
+    'DimUsers': """
+        CREATE TABLE DimUsers (
+            user_id INT PRIMARY KEY,
+            username VARCHAR(255),
+            email VARCHAR(255),
+            role VARCHAR(255),
+            hire_date DATETIME
+        )
+    """,
+    'DimVehicles': """
+        CREATE TABLE DimVehicles (
+            vehicle_id VARCHAR(255) PRIMARY KEY,
+            model VARCHAR(255),
+            year INT,
+            type VARCHAR(255),
+            next_maintenance_date DATETIME,
+            last_maintenance_date DATETIME,
+            last_repaired_date DATETIME
+        )
+    """,
+    'FactDriverTasks': """
+        CREATE TABLE FactDriverTasks (
+            task_id VARCHAR(255) PRIMARY KEY,
+            driver_id INT,
+            vehicle_id VARCHAR(255),
+            task_date DATETIME,
+            km_covered FLOAT
+        )
+    """,
+    'FactMecanoTasks': """
+        CREATE TABLE FactMecanoTasks (
+            task_id VARCHAR(255) PRIMARY KEY,
+            mecano_id INT,
+            vehicle_id VARCHAR(255),
+            repair_date DATETIME,
+            task_done VARCHAR(255)  -- Adding the task_done field
+        )
+    """,
+    'FactVehicleMaintenance': """
+        CREATE TABLE FactVehicleMaintenance (
+            vehicle_id VARCHAR(255) PRIMARY KEY,
+            next_maintenance_date DATETIME,
+            last_maintenance_date DATETIME,
+            last_repaired_date DATETIME,
+            maintenance_count INT
+        )
+    """,
+    'DimDates': """
+        CREATE TABLE DimDates (
+            date_key DATE PRIMARY KEY,
+            day INT,
+            month INT,
+            year INT,
+            quarter INT,
+            day_of_week INT,
+            day_name VARCHAR(255)
+        )
+    """
+}
+
 
     try:
         with engine.connect() as conn:

@@ -35,11 +35,12 @@ def transform_dim_users(users):
 
 def transform_dim_vehicles(trucks):
     print("Transforming DimVehicles...")
-    return trucks[['matricule', 'model', 'year', 'type', 'last_maintenance_date', 'next_maintenance_date', 'last_repared_at']].rename(columns={
+    return trucks[['matricule', 'model', 'year', 'type', 'last_maintenance_date', 'next_maintenance_date', 'last_repared_at', 'status']].rename(columns={
         'matricule': 'vehicle_id',
         'next_maintenance_date': 'next_maintenance_date',
         'last_maintenance_date': 'last_maintenance_date',
-        'last_repared_at': 'last_repaired_date'
+        'last_repared_at': 'last_repaired_date',
+         'status': 'status'   
     })
 
 def transform_fact_driver_tasks(driver_tasks, rehla):
@@ -138,7 +139,8 @@ def load_data(df, table_name, engine):
             type VARCHAR(255),
             next_maintenance_date DATETIME,
             last_maintenance_date DATETIME,
-            last_repaired_date DATETIME
+            last_repaired_date DATETIME,
+            status VARCHAR(255)
         )
     """,
     'FactDriverTasks': """

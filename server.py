@@ -1841,7 +1841,6 @@ def create_engine_db(db_name=None):
 
 @app.route('/total_users', methods=['GET'])
 @cross_origin(supports_credentials=True)
-
 def get_total_users():
     engine = create_engine_db('sawekji2')
     query = "SELECT COUNT(*) AS total FROM DimUsers"
@@ -1850,7 +1849,6 @@ def get_total_users():
 
 @app.route('/new_users', methods=['GET'])
 @cross_origin(supports_credentials=True)
-
 def get_new_users():
     engine = create_engine_db('sawekji2')
     query = "SELECT COUNT(*) AS new_users FROM DimUsers WHERE DATE(hire_date) = CURDATE()"
@@ -1859,7 +1857,6 @@ def get_new_users():
 
 @app.route('/user_activity', methods=['GET'])
 @cross_origin(supports_credentials=True)
-
 def get_user_activity():
     engine = create_engine_db('sawekji2')
     query = """
@@ -1876,7 +1873,6 @@ def get_user_activity():
 
 @app.route('/total_vehicles', methods=['GET'])
 @cross_origin(supports_credentials=True)
-
 def get_total_vehicles():
     engine = create_engine_db('sawekji2')
     query = "SELECT COUNT(*) AS total FROM DimVehicles"
@@ -1885,14 +1881,16 @@ def get_total_vehicles():
 
 @app.route('/vehicle_status', methods=['GET'])
 @cross_origin(supports_credentials=True)
-
 def get_vehicle_status():
     engine = create_engine_db('sawekji2')
     query = """
     SELECT 
         CASE 
-            WHEN next_maintenance_date < CURDATE() THEN 'Operational' 
-            ELSE 'Due maintenance' 
+            WHEN next_maintenance_date < CURDATE() THEN 'Due maintenance'
+            WHEN status = 'Operational' THEN 'Operational'
+            WHEN status = 'In Maintenance' THEN 'In Maintenance'
+            WHEN status = 'Out of Order' THEN 'Out of Order'
+            ELSE 'Unknown'
         END AS status, 
         COUNT(*) AS count 
     FROM DimVehicles 
@@ -1903,7 +1901,6 @@ def get_vehicle_status():
 
 @app.route('/total_tasks', methods=['GET'])
 @cross_origin(supports_credentials=True)
-
 def get_total_tasks():
     engine = create_engine_db('sawekji2')
     query = "SELECT COUNT(*) AS total FROM FactDriverTasks"
@@ -1912,25 +1909,24 @@ def get_total_tasks():
 
 @app.route('/task_status', methods=['GET'])
 @cross_origin(supports_credentials=True)
-
 def get_task_status():
     engine = create_engine_db('sawekji2')
     query = """
     SELECT 
         CASE 
-            WHEN task_date <= CURDATE() THEN 'yes' 
-            ELSE 'no' 
-        END AS done, 
+            WHEN task_date <= CURDATE() THEN 'Completed'
+            WHEN task_date > CURDATE() THEN 'Pending'
+            ELSE 'Unknown'
+        END AS status, 
         COUNT(*) AS count 
     FROM FactDriverTasks 
-    GROUP BY done
+    GROUP BY status
     """
     data = pd.read_sql(query, engine)
     return jsonify(data.to_dict(orient='records'))
 
 @app.route('/task_completion_rate', methods=['GET'])
 @cross_origin(supports_credentials=True)
-
 def get_task_completion_rate():
     engine = create_engine_db('sawekji2')
     query = """
@@ -1942,13 +1938,10 @@ def get_task_completion_rate():
     data = pd.read_sql(query, engine)
     return jsonify(data.to_dict(orient='records'))
 
-
 @app.route('/run_etl', methods=['POST'])
 @cross_origin(supports_credentials=True)
-
 def run_etl():
     try:
-        # Assuming your ETL script is named `etl_script.py` and located in the same directory
         subprocess.run(["python", "warehouse.py"], check=True)
         return jsonify({"status": "success", "message": "ETL process completed successfully."})
     except subprocess.CalledProcessError as e:

@@ -76,8 +76,55 @@ def send_email(receiver_email, subject, message_body, attachment_path=None):
 
 
 
+import uuid
+reset_tokens = {}
 
 
+@app.route('/reset_password', methods=['POST'])
+def reset_password():
+    data = request.get_json()
+    email = data.get('email')
+
+    # Generate a unique token
+    token = str(uuid.uuid4())
+    reset_tokens[token] = email
+
+    # Construct the reset link
+    reset_link = url_for('reset_password_with_token', token=token, _external=True)
+
+    # Send email (assuming send_email function is defined)
+    send_email(email, "Password Reset", f"Click the link to reset your password: {reset_link}")
+
+    return jsonify({'status': 'success', 'message': 'Password reset email sent.'})
+
+
+from flask import flash
+app.secret_key = 'your_secret_key'  # needed for flashing messages
+@app.route('/reset/<token>', methods=['GET', 'POST'])
+def reset_password_with_token(token):
+    if request.method == 'GET':
+        return render_template('reset_password.html', token=token)
+
+    if request.method == 'POST':
+        new_password = request.form.get('new_password')
+        email = reset_tokens.get(token)
+
+        if email:
+            try:
+                connection = mysql.connector.connect(**db_config)
+                cursor = connection.cursor()
+                query = "UPDATE users SET password = %s WHERE Mail= %s"
+                cursor.execute(query, (new_password, email))
+                connection.commit()
+                cursor.close()
+                connection.close()
+                del reset_tokens[token]
+                flash("Your password has been changed successfully. You can now log in with your new password.")
+            except mysql.connector.Error as err:
+                flash(f"Error updating password: {err}")
+        else:
+            flash("Invalid token")
+        return render_template('reset_password_result.html')  # Render a simple template with the flash messages
 
 
 @app.route('/add_user', methods=['POST'])
@@ -1839,109 +1886,91 @@ def create_engine_db(db_name=None):
         url = f'mysql+mysqlconnector://{user}:{password}@{host}'
     return create_engine(url)
 
-@app.route('/total_users', methods=['GET'])
+@app.route('/api/users_overview', methods=['GET'])
 @cross_origin(supports_credentials=True)
-def get_total_users():
-    engine = create_engine_db('sawekji2')
-    query = "SELECT COUNT(*) AS total FROM DimUsers"
-    data = pd.read_sql(query, engine)
-    return jsonify(data.to_dict(orient='records'))
 
-@app.route('/new_users', methods=['GET'])
-@cross_origin(supports_credentials=True)
-def get_new_users():
-    engine = create_engine_db('sawekji2')
-    query = "SELECT COUNT(*) AS new_users FROM DimUsers WHERE DATE(hire_date) = CURDATE()"
-    data = pd.read_sql(query, engine)
-    return jsonify(data.to_dict(orient='records'))
-
-@app.route('/user_activity', methods=['GET'])
-@cross_origin(supports_credentials=True)
-def get_user_activity():
+def users_overview():
     engine = create_engine_db('sawekji2')
     query = """
-    SELECT DATE(task_date) as date, COUNT(*) as count 
-    FROM FactDriverTasks 
-    GROUP BY DATE(task_date)
-    UNION ALL
-    SELECT DATE(repair_date) as date, COUNT(*) as count 
-    FROM FactMecanoTasks 
-    GROUP BY DATE(repair_date)
+        SELECT COUNT(user_id) AS total_users,
+               COUNT(CASE WHEN hire_date > DATE_SUB(NOW(), INTERVAL 1 MONTH) THEN 1 END) AS new_users_last_month
+        FROM DimUsers
     """
-    data = pd.read_sql(query, engine)
-    return jsonify(data.to_dict(orient='records'))
+    result = pd.read_sql(query, engine)
+    return jsonify(result.to_dict(orient='records'))
 
-@app.route('/total_vehicles', methods=['GET'])
+@app.route('/api/vehicle_maintenance_overview', methods=['GET'])
 @cross_origin(supports_credentials=True)
-def get_total_vehicles():
-    engine = create_engine_db('sawekji2')
-    query = "SELECT COUNT(*) AS total FROM DimVehicles"
-    data = pd.read_sql(query, engine)
-    return jsonify(data.to_dict(orient='records'))
 
-@app.route('/vehicle_status', methods=['GET'])
-@cross_origin(supports_credentials=True)
-def get_vehicle_status():
+def vehicle_maintenance_overview():
     engine = create_engine_db('sawekji2')
     query = """
-    SELECT 
-        CASE 
-            WHEN next_maintenance_date < CURDATE() THEN 'Due maintenance'
-            WHEN status = 'Operational' THEN 'Operational'
-            WHEN status = 'In Maintenance' THEN 'In Maintenance'
-            WHEN status = 'Out of Order' THEN 'Out of Order'
-            ELSE 'Unknown'
-        END AS status, 
-        COUNT(*) AS count 
-    FROM DimVehicles 
-    GROUP BY status
+        SELECT COUNT(vehicle_id) AS total_vehicles,
+               COUNT(CASE WHEN next_maintenance_date < NOW() THEN 1 END) AS vehicles_due_for_maintenance,
+               COUNT(CASE WHEN last_repaired_date > DATE_SUB(NOW(), INTERVAL 1 MONTH) THEN 1 END) AS vehicles_repaired_last_month
+        FROM FactVehicleMaintenance
     """
-    data = pd.read_sql(query, engine)
-    return jsonify(data.to_dict(orient='records'))
+    result = pd.read_sql(query, engine)
+    return jsonify(result.to_dict(orient='records'))
 
-@app.route('/total_tasks', methods=['GET'])
+@app.route('/api/driver_tasks_overview', methods=['GET'])
 @cross_origin(supports_credentials=True)
-def get_total_tasks():
-    engine = create_engine_db('sawekji2')
-    query = "SELECT COUNT(*) AS total FROM FactDriverTasks"
-    data = pd.read_sql(query, engine)
-    return jsonify(data.to_dict(orient='records'))
 
-@app.route('/task_status', methods=['GET'])
-@cross_origin(supports_credentials=True)
-def get_task_status():
+def driver_tasks_overview():
     engine = create_engine_db('sawekji2')
     query = """
-    SELECT 
-        CASE 
-            WHEN task_date <= CURDATE() THEN 'Completed'
-            WHEN task_date > CURDATE() THEN 'Pending'
-            ELSE 'Unknown'
-        END AS status, 
-        COUNT(*) AS count 
-    FROM FactDriverTasks 
-    GROUP BY status
+        SELECT COUNT(task_id) AS total_tasks,
+               SUM(km_covered) AS total_km_covered,
+               COUNT(CASE WHEN task_date > DATE_SUB(NOW(), INTERVAL 1 MONTH) THEN 1 END) AS tasks_last_month,
+               SUM(CASE WHEN task_date > DATE_SUB(NOW(), INTERVAL 1 MONTH) THEN km_covered END) AS km_last_month
+        FROM FactDriverTasks
     """
-    data = pd.read_sql(query, engine)
-    return jsonify(data.to_dict(orient='records'))
+    result = pd.read_sql(query, engine)
+    return jsonify(result.to_dict(orient='records'))
 
-@app.route('/task_completion_rate', methods=['GET'])
+@app.route('/api/mecano_tasks_overview', methods=['GET'])
 @cross_origin(supports_credentials=True)
-def get_task_completion_rate():
+
+def mecano_tasks_overview():
     engine = create_engine_db('sawekji2')
     query = """
-    SELECT DATE(task_date) as date, COUNT(*) as count 
-    FROM FactDriverTasks 
-    WHERE task_date <= CURDATE()
-    GROUP BY DATE(task_date)
+        SELECT COUNT(task_id) AS total_tasks,
+               COUNT(CASE WHEN task_done = 1 THEN 1 END) AS completed_tasks,
+               COUNT(CASE WHEN repair_date > DATE_SUB(NOW(), INTERVAL 1 MONTH) THEN 1 END) AS tasks_last_month,
+               COUNT(CASE WHEN repair_date > DATE_SUB(NOW(), INTERVAL 1 MONTH) AND task_done = 1 THEN 1 END) AS completed_last_month
+        FROM FactMecanoTasks
     """
-    data = pd.read_sql(query, engine)
-    return jsonify(data.to_dict(orient='records'))
+    result = pd.read_sql(query, engine)
+    return jsonify(result.to_dict(orient='records'))
+
+
+
+
+@app.route('/api/vehicle_status', methods=['GET'])
+@cross_origin(supports_credentials=True)
+def vehicle_status():
+    engine = create_engine_db('sawekji2')
+    query = """
+        SELECT status AS id,
+               COUNT(vehicle_id) AS value
+        FROM DimVehicles
+        GROUP BY status
+    """
+    result = pd.read_sql(query, engine)
+    return jsonify(result.to_dict(orient='records'))
+
+
+
+
+
+
 
 @app.route('/run_etl', methods=['POST'])
 @cross_origin(supports_credentials=True)
+
 def run_etl():
     try:
+        # Assuming your ETL script is named `etl_script.py` and located in the same directory
         subprocess.run(["python", "warehouse.py"], check=True)
         return jsonify({"status": "success", "message": "ETL process completed successfully."})
     except subprocess.CalledProcessError as e:
@@ -1953,7 +1982,51 @@ def run_etl():
 
 
 
+@app.route('/api/task_management')
 
+@cross_origin(supports_credentials=True)
+def task_management():
+    engine = create_engine_db('sawekji2')
+
+    query = """
+    SELECT 'Driver' as task_type, COUNT(*) as count FROM FactDriverTasks
+    UNION ALL
+    SELECT 'Mechanic' as task_type, COUNT(*) as count FROM FactMecanoTasks
+    """
+    data = pd.read_sql(query, engine)
+    return jsonify(data.to_dict(orient='records'))
+
+@app.route('/api/task_status')
+@cross_origin(supports_credentials=True)
+
+def task_status():
+    engine = create_engine_db('sawekji2')
+
+    query = """
+    SELECT task_done as status, COUNT(*) as count FROM FactMecanoTasks
+    GROUP BY task_done
+    UNION ALL
+    SELECT 'Pending' as status, COUNT(*) as count FROM FactDriverTasks WHERE task_date > NOW()
+    """
+    data = pd.read_sql(query, engine)
+    return jsonify(data.to_dict(orient='records'))
+
+@app.route('/api/vehicle_assignments')
+@cross_origin(supports_credentials=True)
+
+def vehicle_assignments():
+    engine = create_engine_db('sawekji2')
+
+    query = """
+    SELECT 'Assigned to Drivers' as assignment, COUNT(DISTINCT vehicle_id) as count
+    FROM FactDriverTasks
+    UNION ALL
+    SELECT 'Under Maintenance' as assignment, COUNT(DISTINCT vehicle_id) as count
+    FROM FactMecanoTasks
+    WHERE task_done = 'No'
+    """
+    data = pd.read_sql(query, engine)
+    return jsonify(data.to_dict(orient='records'))
 
 
 
@@ -1994,4 +2067,4 @@ def run_etl():
 
 
 if __name__ == '__main__':
-    app.run(host='192.168.1.181', port=5001, debug=True)
+    app.run(host='192.168.1.127', port=5001, debug=True)

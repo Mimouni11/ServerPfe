@@ -1873,160 +1873,100 @@ def get_destination_counts():
         connection.close()
         return jsonify({'message': 'User not found'}), 404
 #--------------------------------------------------------- DASHBOARD --------------------------------------------------------
-import pandas as pd
 from sqlalchemy import create_engine
-# Create a SQLAlchemy engine
-def create_engine_db(db_name=None):
-    user = 'me'
-    password = '0000'
-    host = 'localhost'
-    if db_name:
-        url = f'mysql+mysqlconnector://{user}:{password}@{host}/{db_name}'
-    else:
-        url = f'mysql+mysqlconnector://{user}:{password}@{host}'
-    return create_engine(url)
+import pandas as pd
 
-@app.route('/api/users_overview', methods=['GET'])
+engine = create_engine('mysql+mysqlconnector://me:0000@localhost/dwh2')
+
+@app.route('/active-users-count')
 @cross_origin(supports_credentials=True)
 
-def users_overview():
-    engine = create_engine_db('sawekji2')
+def active_users_count():
+    query = "SELECT COUNT(*) AS active_users_count FROM dimusers WHERE status = 'active';"
+    result = pd.read_sql(query, engine)
+    print(result)
+    return jsonify(result.to_dict(orient='records'))
+
+@app.route('/inactive-users-count')
+@cross_origin(supports_credentials=True)
+
+def inactive_users_count():
+    query = "SELECT COUNT(*) AS inactive_users_count FROM dimusers WHERE status = 'inactive';"
+    result = pd.read_sql(query, engine)
+    print(result)
+    return jsonify(result.to_dict(orient='records'))
+
+@app.route('/new-users-count-by-date')
+@cross_origin(supports_credentials=True)
+
+def new_users_count_by_date():
+    query = "SELECT hire_date, COUNT(*) AS new_users_count FROM dimusers GROUP BY hire_date ORDER BY hire_date;"
+    result = pd.read_sql(query, engine)
+    return jsonify(result.to_dict(orient='records'))
+
+@app.route('/user-activity-count')
+@cross_origin(supports_credentials=True)
+
+def user_activity_count():
+    query = "SELECT user_id, activity_count FROM user_management_fact;"
+    result = pd.read_sql(query, engine)
+    return jsonify(result.to_dict(orient='records'))
+
+@app.route('/average-retention-rate')
+@cross_origin(supports_credentials=True)
+
+def average_retention_rate():
+    query = "SELECT AVG(retention_rate) AS average_retention_rate FROM user_management_fact;"
+    result = pd.read_sql(query, engine)
+    return jsonify(result.to_dict(orient='records'))
+
+@app.route('/user-engagement-score')
+@cross_origin(supports_credentials=True)
+
+def user_engagement_score():
+    query = "SELECT user_id, engagement_score FROM user_management_fact ORDER BY engagement_score DESC;"
+    result = pd.read_sql(query, engine)
+    return jsonify(result.to_dict(orient='records'))
+
+@app.route('/daily-active-users')
+@cross_origin(supports_credentials=True)
+
+def daily_active_users():
     query = """
-        SELECT COUNT(user_id) AS total_users,
-               COUNT(CASE WHEN hire_date > DATE_SUB(NOW(), INTERVAL 1 MONTH) THEN 1 END) AS new_users_last_month
-        FROM DimUsers
+    SELECT t.date_key, COUNT(umf.user_id) AS daily_active_users
+    FROM time_dimension t
+    JOIN user_management_fact umf ON t.date_key = umf.last_time_active_date
+    WHERE umf.status = 'active'
+    GROUP BY t.date_key
+    ORDER BY t.date_key;
     """
     result = pd.read_sql(query, engine)
     return jsonify(result.to_dict(orient='records'))
 
-@app.route('/api/vehicle_maintenance_overview', methods=['GET'])
+@app.route('/user-churn-rate')
 @cross_origin(supports_credentials=True)
 
-def vehicle_maintenance_overview():
-    engine = create_engine_db('sawekji2')
-    query = """
-        SELECT COUNT(vehicle_id) AS total_vehicles,
-               COUNT(CASE WHEN next_maintenance_date < NOW() THEN 1 END) AS vehicles_due_for_maintenance,
-               COUNT(CASE WHEN last_repaired_date > DATE_SUB(NOW(), INTERVAL 1 MONTH) THEN 1 END) AS vehicles_repaired_last_month
-        FROM FactVehicleMaintenance
-    """
+def user_churn_rate():
+    query = "SELECT user_id, churned_users_count FROM user_management_fact WHERE status = 'inactive';"
     result = pd.read_sql(query, engine)
     return jsonify(result.to_dict(orient='records'))
 
-@app.route('/api/driver_tasks_overview', methods=['GET'])
+@app.route('/average-activity-per-day')
 @cross_origin(supports_credentials=True)
 
-def driver_tasks_overview():
-    engine = create_engine_db('sawekji2')
-    query = """
-        SELECT COUNT(task_id) AS total_tasks,
-               SUM(km_covered) AS total_km_covered,
-               COUNT(CASE WHEN task_date > DATE_SUB(NOW(), INTERVAL 1 MONTH) THEN 1 END) AS tasks_last_month,
-               SUM(CASE WHEN task_date > DATE_SUB(NOW(), INTERVAL 1 MONTH) THEN km_covered END) AS km_last_month
-        FROM FactDriverTasks
-    """
+def average_activity_per_day():
+    query = "SELECT user_id, AVG(avg_activity_per_day) AS average_activity_per_day FROM user_management_fact GROUP BY user_id;"
     result = pd.read_sql(query, engine)
     return jsonify(result.to_dict(orient='records'))
 
-@app.route('/api/mecano_tasks_overview', methods=['GET'])
+@app.route('/users-with-most-activities')
 @cross_origin(supports_credentials=True)
 
-def mecano_tasks_overview():
-    engine = create_engine_db('sawekji2')
-    query = """
-        SELECT COUNT(task_id) AS total_tasks,
-               COUNT(CASE WHEN task_done = 1 THEN 1 END) AS completed_tasks,
-               COUNT(CASE WHEN repair_date > DATE_SUB(NOW(), INTERVAL 1 MONTH) THEN 1 END) AS tasks_last_month,
-               COUNT(CASE WHEN repair_date > DATE_SUB(NOW(), INTERVAL 1 MONTH) AND task_done = 1 THEN 1 END) AS completed_last_month
-        FROM FactMecanoTasks
-    """
+def users_with_most_activities():
+    query = "SELECT user_id, activity_count FROM user_management_fact ORDER BY activity_count DESC LIMIT 10;"
     result = pd.read_sql(query, engine)
     return jsonify(result.to_dict(orient='records'))
 
-
-
-
-@app.route('/api/vehicle_status', methods=['GET'])
-@cross_origin(supports_credentials=True)
-def vehicle_status():
-    engine = create_engine_db('sawekji2')
-    query = """
-        SELECT status AS id,
-               COUNT(vehicle_id) AS value
-        FROM DimVehicles
-        GROUP BY status
-    """
-    result = pd.read_sql(query, engine)
-    return jsonify(result.to_dict(orient='records'))
-
-
-
-
-
-
-
-@app.route('/run_etl', methods=['POST'])
-@cross_origin(supports_credentials=True)
-
-def run_etl():
-    try:
-        # Assuming your ETL script is named `etl_script.py` and located in the same directory
-        subprocess.run(["python", "warehouse.py"], check=True)
-        return jsonify({"status": "success", "message": "ETL process completed successfully."})
-    except subprocess.CalledProcessError as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-
-
-
-
-
-
-@app.route('/api/task_management')
-
-@cross_origin(supports_credentials=True)
-def task_management():
-    engine = create_engine_db('sawekji2')
-
-    query = """
-    SELECT 'Driver' as task_type, COUNT(*) as count FROM FactDriverTasks
-    UNION ALL
-    SELECT 'Mechanic' as task_type, COUNT(*) as count FROM FactMecanoTasks
-    """
-    data = pd.read_sql(query, engine)
-    return jsonify(data.to_dict(orient='records'))
-
-@app.route('/api/task_status')
-@cross_origin(supports_credentials=True)
-
-def task_status():
-    engine = create_engine_db('sawekji2')
-
-    query = """
-    SELECT task_done as status, COUNT(*) as count FROM FactMecanoTasks
-    GROUP BY task_done
-    UNION ALL
-    SELECT 'Pending' as status, COUNT(*) as count FROM FactDriverTasks WHERE task_date > NOW()
-    """
-    data = pd.read_sql(query, engine)
-    return jsonify(data.to_dict(orient='records'))
-
-@app.route('/api/vehicle_assignments')
-@cross_origin(supports_credentials=True)
-
-def vehicle_assignments():
-    engine = create_engine_db('sawekji2')
-
-    query = """
-    SELECT 'Assigned to Drivers' as assignment, COUNT(DISTINCT vehicle_id) as count
-    FROM FactDriverTasks
-    UNION ALL
-    SELECT 'Under Maintenance' as assignment, COUNT(DISTINCT vehicle_id) as count
-    FROM FactMecanoTasks
-    WHERE task_done = 'No'
-    """
-    data = pd.read_sql(query, engine)
-    return jsonify(data.to_dict(orient='records'))
 
 
 
@@ -2067,4 +2007,4 @@ def vehicle_assignments():
 
 
 if __name__ == '__main__':
-    app.run(host='192.168.1.156', port=5001, debug=True)
+    app.run(host='192.168.1.178', port=5001, debug=True)

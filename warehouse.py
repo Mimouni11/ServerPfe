@@ -71,10 +71,51 @@ def create_user_management_fact(dim_users, time_dim):
     # Ensure the dates are in the same format
     time_dim['date_key'] = pd.to_datetime(time_dim['date_key']).dt.date
 
-    # Merge to get date_key from time_dim based on date
-    dim_users = dim_users.merge(time_dim[['date_key']], left_on='last_time_active', right_on='date_key', how='left')
+    # Merge to get date_key from time_dim based on last_time_active
+    dim_users = dim_users.merge(time_dim[['date_key']], left_on='last_time_active', right_on='date_key', how='left', suffixes=('', '_last_active'))
 
-    user_management_fact = dim_users[['user_id', 'date_key', 'status']].copy()
+    user_management_fact = dim_users[['user_id', 'date_key', 'status', 'hire_date']].copy()
+    user_management_fact.rename(columns={'date_key': 'last_time_active_date'}, inplace=True)
+
+    return user_management_fact
+
+def calculate_measures(dim_users, user_management_fact):
+    print("Calculating measures for User Management Fact Table...")
+
+    # Calculate activity counts
+    activity_count = user_management_fact.groupby('user_id').size().reset_index(name='activity_count')
+    user_management_fact = user_management_fact.merge(activity_count, on='user_id', how='left')
+
+    # Calculate active and inactive users count
+    user_management_fact['active_users_count'] = user_management_fact['status'].apply(lambda x: 1 if x == 'active' else 0)
+    user_management_fact['inactive_users_count'] = user_management_fact['status'].apply(lambda x: 1 if x == 'inactive' else 0)
+
+    # Calculate new users count
+    new_users_count = dim_users.groupby('hire_date').size().reset_index(name='new_users_count')
+    user_management_fact = user_management_fact.merge(new_users_count, left_on='hire_date', right_on='hire_date', how='left')
+
+    # Calculate churned users count
+    churned_users_count = user_management_fact.groupby(['user_id', 'status']).size().reset_index(name='churned_users_count')
+    user_management_fact = user_management_fact.merge(churned_users_count, on='user_id', how='left')
+
+    # Remove duplicate status columns
+    if 'status_x' in user_management_fact.columns:
+        user_management_fact['status'] = user_management_fact['status_x']
+        user_management_fact.drop(columns=['status_x', 'status_y'], inplace=True)
+
+    # Calculate retention rate
+    user_management_fact['retention_rate'] = user_management_fact['active_users_count'] / (user_management_fact['active_users_count'] + user_management_fact['churned_users_count'])
+
+    # Calculate average time between activities
+    user_management_fact['last_time_active_date'] = pd.to_datetime(user_management_fact['last_time_active_date'])
+    user_management_fact['avg_time_between_activities'] = user_management_fact.groupby('user_id')['last_time_active_date'].diff().dt.total_seconds().mean()
+
+    # Calculate average user activity per day
+    avg_activity_per_day = user_management_fact.groupby('last_time_active_date')['activity_count'].mean().reset_index(name='avg_activity_per_day')
+    user_management_fact = user_management_fact.merge(avg_activity_per_day, on='last_time_active_date', how='left')
+
+    # Calculate user engagement score
+    user_management_fact['engagement_score'] = user_management_fact['activity_count'] * 0.5 + user_management_fact['retention_rate'] * 0.3
 
     return user_management_fact
 
@@ -124,13 +165,24 @@ def main_etl_process():
 
     # Create and load the User Management Fact Table
     user_management_fact = create_user_management_fact(dim_users, time_dim)
+    user_management_fact = calculate_measures(dim_users, user_management_fact)
     create_user_management_fact_table_query = """
         CREATE TABLE IF NOT EXISTS user_management_fact (
             user_id INT,
-            date_key DATE,
+            last_time_active_date DATE,
             status VARCHAR(255),
+            hire_date DATE,
+            activity_count INT,
+            active_users_count INT,
+            inactive_users_count INT,
+            new_users_count INT,
+            churned_users_count INT,
+            retention_rate FLOAT,
+            avg_time_between_activities FLOAT,
+            avg_activity_per_day FLOAT,
+            engagement_score FLOAT,
             FOREIGN KEY (user_id) REFERENCES dimusers(user_id),
-            FOREIGN KEY (date_key) REFERENCES time_dimension(date_key)
+            FOREIGN KEY (last_time_active_date) REFERENCES time_dimension(date_key)
         )
     """
     load_data(user_management_fact, 'user_management_fact', destination_engine, create_user_management_fact_table_query)

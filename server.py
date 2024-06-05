@@ -2007,4 +2007,4 @@ def users_with_most_activities():
 
 
 if __name__ == '__main__':
-    app.run(host='192.168.1.178', port=5001, debug=True)
+    app.run(host='192.168.1.6', port=5001, debug=True)

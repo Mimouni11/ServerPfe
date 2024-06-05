@@ -114,34 +114,34 @@ def generate_date_range(users):
 
 
 
+
 def transform_vehicle_maintenance_fact(trucks, time_dim):
     print("Transforming VehicleMaintenanceFact...")
 
-    # Ensure the dates are in datetime format
-    trucks['last_maintenance_date'] = pd.to_datetime(trucks['last_maintenance_date'], errors='coerce')
-    trucks['next_maintenance_date'] = pd.to_datetime(trucks['next_maintenance_date'], errors='coerce')
-    trucks['last_repared_at'] = pd.to_datetime(trucks['last_repared_at'], errors='coerce')
+    # Convert dates to datetime in temporary variables for calculations
+    last_maintenance_date_dt = pd.to_datetime(trucks['last_maintenance_date'], errors='coerce')
+    next_maintenance_date_dt = pd.to_datetime(trucks['next_maintenance_date'], errors='coerce')
+    last_repared_at_dt = pd.to_datetime(trucks['last_repared_at'], errors='coerce')
 
-    time_dim['date_key'] = pd.to_datetime(time_dim['date_key'])
-    trucks.rename(columns={'matricule': 'vehicle_id'}, inplace=True)
+    # Calculate maintenance interval and time since last repair using datetime calculations
+    trucks['maintenance_interval'] = (next_maintenance_date_dt - last_maintenance_date_dt).dt.days
+    trucks['time_since_last_repair'] = (pd.to_datetime('today') - last_repared_at_dt).dt.days
 
     # Merge to get date_key from time_dim based on date fields
-    trucks = trucks.merge(time_dim[['date_key', 'day']], left_on='last_maintenance_date', right_on='date_key', how='left').rename(columns={'date_key': 'last_maintenance_date_key', 'day': 'last_maintenance_day'})
-    trucks = trucks.merge(time_dim[['date_key', 'day']], left_on='next_maintenance_date', right_on='date_key', how='left').rename(columns={'date_key': 'next_maintenance_date_key', 'day': 'next_maintenance_day'})
-    trucks = trucks.merge(time_dim[['date_key', 'day']], left_on='last_repared_at', right_on='date_key', how='left').rename(columns={'date_key': 'last_repared_at_key', 'day': 'last_repared_day'})
+    time_dim['date_key'] = pd.to_datetime(time_dim['date_key']).dt.date
+    trucks = trucks.merge(time_dim[['date_key']], left_on='last_maintenance_date', right_on='date_key', how='left').rename(columns={'date_key': 'last_maintenance_date_key'})
+    trucks = trucks.merge(time_dim[['date_key']], left_on='next_maintenance_date', right_on='date_key', how='left').rename(columns={'date_key': 'next_maintenance_date_key'})
+    trucks = trucks.merge(time_dim[['date_key']], left_on='last_repared_at', right_on='date_key', how='left').rename(columns={'date_key': 'last_repared_at_key'})
 
-    # Calculate measures
-    trucks['maintenance_duration'] = (trucks['next_maintenance_date'] - trucks['last_maintenance_date']).dt.days
-    trucks['days_since_last_repair'] = (pd.to_datetime('today') - trucks['last_repared_at']).dt.days
-    trucks['is_overdue'] = trucks['next_maintenance_date'] < pd.to_datetime('today')
-    trucks['repair_count'] = trucks.groupby('vehicle_id')['last_repared_at'].transform('count')
+    # Rename 'matricule' to 'vehicle_id'
+    trucks.rename(columns={'matricule': 'vehicle_id'}, inplace=True)
 
-    vehicle_maintenance_fact = trucks[['vehicle_id', 'last_maintenance_date_key', 'next_maintenance_date_key', 'last_repared_at_key', 'maintenance_duration', 'days_since_last_repair', 'is_overdue', 'repair_count']].copy()
-
-    # Debug print to check the final data structure
-    print(vehicle_maintenance_fact.head())
+    vehicle_maintenance_fact = trucks[['vehicle_id', 'last_maintenance_date_key', 'next_maintenance_date_key', 'last_repared_at_key', 'maintenance_interval', 'time_since_last_repair']].copy()
 
     return vehicle_maintenance_fact
+
+
+
 
 def create_user_management_fact(users, dim_users, time_dim):
     print("Creating User Management Fact Table...")
@@ -291,21 +291,19 @@ def main_etl_process():
     # Transform data and create vehicle maintenance fact table
     vehicle_maintenance_fact = transform_vehicle_maintenance_fact(trucks, time_dim)
     create_vehicle_maintenance_fact_table_query = """
-    CREATE TABLE IF NOT EXISTS vehicle_maintenance_fact (
-        vehicle_id VARCHAR(255),
-        last_maintenance_date_key DATE,
-        next_maintenance_date_key DATE,
-        last_repared_at_key DATE,
-        maintenance_duration INT,
-        days_since_last_repair INT,
-        is_overdue BOOLEAN,
-        repair_count INT,
-        FOREIGN KEY (vehicle_id) REFERENCES dim_vehicles(vehicle_id),
-        FOREIGN KEY (last_maintenance_date_key) REFERENCES time_dimension(date_key),
-        FOREIGN KEY (next_maintenance_date_key) REFERENCES time_dimension(date_key),
-        FOREIGN KEY (last_repared_at_key) REFERENCES time_dimension(date_key)
-    )
-"""
+        CREATE TABLE IF NOT EXISTS vehicle_maintenance_fact (
+            vehicle_id VARCHAR(255),
+            last_maintenance_date_key DATE,
+            next_maintenance_date_key DATE,
+            last_repared_at_key DATE,
+            maintenance_interval INT,
+            time_since_last_repair INT,
+            FOREIGN KEY (vehicle_id) REFERENCES dim_vehicles(vehicle_id),
+            FOREIGN KEY (last_maintenance_date_key) REFERENCES time_dimension(date_key),
+            FOREIGN KEY (next_maintenance_date_key) REFERENCES time_dimension(date_key),
+            FOREIGN KEY (last_repared_at_key) REFERENCES time_dimension(date_key)
+        )
+    """
     load_data(vehicle_maintenance_fact, 'vehicle_maintenance_fact', destination_engine, create_vehicle_maintenance_fact_table_query, unique_columns=['vehicle_id', 'last_maintenance_date_key', 'next_maintenance_date_key', 'last_repared_at_key'])
 
     

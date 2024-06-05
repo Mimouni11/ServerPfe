@@ -92,15 +92,26 @@ def load_data(df, table_name, engine, create_table_query=None, unique_columns=No
     except Exception as e:
         print(f"Error loading data into {table_name}: {e}")
 
-def generate_date_range(users):
-    print("Generating date range based on data...")
+def generate_date_range_for_data_warehouse(relevant_tables):
+    print("Generating date range for the data warehouse...")
 
-    min_date = users[['created_at', 'last_activity_at']].min().min()
-    end_date = pd.to_datetime('today').date()
+    all_dates = []
 
-    print(f"Minimum date in data: {min_date}")
+    # Iterate over relevant tables to find the minimum and maximum dates
+    for table in relevant_tables:
+        date_columns = [col for col in table.columns if col.endswith('_at') or col.endswith('_date')]
+        if date_columns:
+            min_date = table[date_columns].min().min()
+            max_date = table[date_columns].max().max()
+            all_dates.extend(pd.date_range(min_date, max_date).tolist())
 
-    dates = pd.date_range(min_date, end_date).to_pydatetime().tolist()
+    min_date = min(all_dates)
+    max_date = max(all_dates)
+    
+    print(f"Minimum date in data warehouse: {min_date}")
+    print(f"Maximum date in data warehouse: {max_date}")
+
+    dates = pd.date_range(min_date, max_date).to_pydatetime().tolist()
     dim_dates = pd.DataFrame(dates, columns=['date'])
     dim_dates['day'] = dim_dates['date'].dt.day
     dim_dates['month'] = dim_dates['date'].dt.month
@@ -110,6 +121,53 @@ def generate_date_range(users):
     dim_dates['day_name'] = dim_dates['date'].dt.day_name()
 
     return dim_dates.rename(columns={'date': 'date_key'})
+
+
+def transform_fact_mecanotask(dim_users, mecano_tasks, time_dim, dim_vehicles):
+    print("Transforming FactMecanotask...")
+
+    # Filter mechanics from dim_users table
+    mechanics = dim_users[dim_users['role'] == 'mecano'][['user_id', 'username']]
+
+    # Merge mechanics with mecano_tasks
+    fact_mecanotask = mecano_tasks.merge(mechanics, left_on='id_mecano', right_on='user_id', how='inner')
+
+    # Print columns to debug
+    print("Columns after merging mecano_tasks and mechanics:")
+    print(fact_mecanotask.columns)
+
+    # Convert task date to datetime and merge with time_dim
+    fact_mecanotask['date'] = pd.to_datetime(fact_mecanotask['date'], errors='coerce').dt.date
+    time_dim['date_key'] = pd.to_datetime(time_dim['date_key']).dt.date
+    fact_mecanotask = fact_mecanotask.merge(time_dim[['date_key']], left_on='date', right_on='date_key', how='left')
+
+    # Print columns to debug
+    print("Columns after merging with time_dim:")
+    print(fact_mecanotask.columns)
+
+    # Merge with dim_vehicles to get the vehicle_id
+    fact_mecanotask = fact_mecanotask.merge(dim_vehicles[['vehicle_id']], left_on='matricule', right_on='vehicle_id', how='left')
+
+    # Print columns to debug
+    print("Columns after merging with dim_vehicles:")
+    print(fact_mecanotask.columns)
+
+    # Verify if 'task_id' is a column in fact_mecanotask
+    if 'task_id' in fact_mecanotask.columns:
+        # Select relevant columns
+        fact_mecanotask = fact_mecanotask[['user_id', 'task_id', 'date_key', 'vehicle_id']].rename(columns={
+            'task_id': 'task_id',
+            'date_key': 'task_date_key',
+            'vehicle_id': 'vehicle_id'
+        })
+    else:
+        print("Error: 'task_id' not in columns")
+
+    # Print columns to debug
+    print("Final columns in fact_mecanotask:")
+    print(fact_mecanotask.columns)
+
+    return fact_mecanotask
 
 
 
@@ -234,7 +292,8 @@ def main_etl_process():
     load_data(dim_users, 'dimusers', destination_engine, create_dim_users_table_query)
 
     # Create and load the Time Dimension table
-    time_dim = generate_date_range(users)
+    relevant_tables = [users, driver_tasks, trucks]  # List of relevant tables in your data warehouse
+    time_dim = generate_date_range_for_data_warehouse(relevant_tables)
     create_time_dim_table_query = """
         CREATE TABLE IF NOT EXISTS time_dimension (
             date_key DATE PRIMARY KEY,
@@ -287,7 +346,7 @@ def main_etl_process():
         )
     """
     load_data(user_management_fact, 'user_management_fact', destination_engine, create_user_management_fact_table_query, unique_columns=['user_id', 'hire_date', 'last_time_active'])
-    
+    print("ETL process for User Management completed.")
     # Transform data and create vehicle maintenance fact table
     vehicle_maintenance_fact = transform_vehicle_maintenance_fact(trucks, time_dim)
     create_vehicle_maintenance_fact_table_query = """
@@ -306,9 +365,26 @@ def main_etl_process():
     """
     load_data(vehicle_maintenance_fact, 'vehicle_maintenance_fact', destination_engine, create_vehicle_maintenance_fact_table_query, unique_columns=['vehicle_id', 'last_maintenance_date_key', 'next_maintenance_date_key', 'last_repared_at_key'])
 
-    
+   # Transform fact_mecanotask
+    fact_mecanotask = transform_fact_mecanotask(dim_users, mecano_tasks, time_dim, dim_vehicles)
 
-    print("ETL process for User Management completed.")
+    # Create table for fact_mecanotask and load data
+    create_fact_mecanotask_table_query = """
+        CREATE TABLE IF NOT EXISTS fact_mecanotask (
+            user_id INT,
+            task_id VARCHAR(255),
+            task_date_key DATE,
+            vehicle_id VARCHAR(255),
+            FOREIGN KEY (user_id) REFERENCES dimusers(user_id),
+            FOREIGN KEY (task_date_key) REFERENCES time_dimension(date_key),
+            FOREIGN KEY (vehicle_id) REFERENCES dim_vehicles(vehicle_id)
+        )
+    """
+    load_data(fact_mecanotask, 'fact_mecanotask', destination_engine, create_fact_mecanotask_table_query, unique_columns=['user_id', 'task_id', 'task_date_key', 'vehicle_id'])
+
+    print("ETL process for fact_mecanotask completed.") 
+
+    
 
 if __name__ == "__main__":
     main_etl_process()

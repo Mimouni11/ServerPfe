@@ -236,6 +236,68 @@ def transform_fact_mecanotask(dim_users, mecano_tasks, time_dim, dim_vehicles, t
 
 
 
+def transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dim, rehla, dim_destinations):
+    print("Transforming FactDriverTasks...")
+
+    # Filter drivers from dim_users table
+    drivers = dim_users[dim_users['role'] == 'driver'][['user_id', 'username']]
+    print("Drivers:")
+    print(drivers.head())
+
+    # Filter driver tasks from task_dim
+    driver_tasks_dim = task_dim[task_dim['task_for'] == 'driver']
+    print("Driver Tasks Dimension:")
+    print(driver_tasks_dim.head())
+
+    # Merge driver tasks with rehla to get destination IDs
+    driver_tasks = driver_tasks.merge(rehla[['id_task', 'destinations']], left_on='task_id', right_on='id_task', how='inner')
+    print("After merging driver tasks with rehla:")
+    print(driver_tasks.head())
+
+    # Split destinations and get the destination IDs
+    driver_tasks['destination'] = driver_tasks['destinations'].str.split(',')
+    driver_tasks = driver_tasks.explode('destination').reset_index(drop=True)
+    print("After splitting destinations:")
+    print(driver_tasks.head())
+
+    # Check contents of dim_destinations before merging
+    print("dim_destinations columns:")
+    print(dim_destinations.columns)
+    print(dim_destinations.head())
+
+    # Add destination_id column to dim_destinations
+    dim_destinations['destination_id'] = range(1, len(dim_destinations) + 1)
+    dim_destinations = dim_destinations[['destination', 'destination_id']]
+
+    # Merge with dim_destinations to get destination IDs
+    driver_tasks = driver_tasks.merge(dim_destinations, on='destination', how='left')
+    print("After merging with dim_destinations:")
+    print(driver_tasks.head())
+
+    # Merge drivers to get user IDs
+    driver_tasks = driver_tasks.merge(drivers, left_on='id_driver', right_on='user_id', how='inner')
+    print("After merging with drivers:")
+    print(driver_tasks.head())
+
+    # Convert task date to datetime and merge with time_dim
+    driver_tasks['date'] = pd.to_datetime(driver_tasks['date'], errors='coerce').dt.date
+    time_dim['date_key'] = pd.to_datetime(time_dim['date_key']).dt.date
+    driver_tasks = driver_tasks.merge(time_dim[['date_key']], left_on='date', right_on='date_key', how='left')
+    print("After merging with time_dim:")
+    print(driver_tasks.head())
+
+    # Select relevant columns for the final fact table
+    fact_driver_tasks = driver_tasks[['user_id', 'task_id', 'date_key', 'destination_id']].rename(columns={
+        'date_key': 'task_date_key',
+        'destination_id': 'destination_id'
+    })
+
+    # Ensure final DataFrame has no duplicates
+    fact_driver_tasks = fact_driver_tasks.drop_duplicates()
+    print("Final columns in fact_driver_tasks:")
+    print(fact_driver_tasks.columns)
+
+    return fact_driver_tasks
 
 
 
@@ -398,14 +460,16 @@ def main_etl_process():
      """
     load_data(dim_vehicles, 'dim_vehicles', destination_engine, create_dim_vehicles_table_query)
 
+   #Transform dim_destinations
     dim_destinations = transform_dim_destinations(rehla)
+    dim_destinations['destination_id'] = range(1, len(dim_destinations) + 1)
     create_dim_destinations_table_query = """
-CREATE TABLE IF NOT EXISTS dim_destinations (
-    destination_id INT PRIMARY KEY AUTO_INCREMENT,
-    destination VARCHAR(255)
-)
-"""
-    load_data(dim_destinations, 'dim_destinations', destination_engine, create_dim_destinations_table_query)  
+    CREATE TABLE IF NOT EXISTS dim_destinations (
+        destination_id INT PRIMARY KEY,
+        destination VARCHAR(255)
+    )
+    """
+    load_data(dim_destinations, 'dim_destinations', destination_engine, create_dim_destinations_table_query)
 
 
 
@@ -474,7 +538,28 @@ CREATE TABLE IF NOT EXISTS dim_destinations (
     load_data(fact_mecanotask, 'fact_mecanotask', destination_engine, create_fact_mecanotask_table_query, unique_columns=['user_id', 'task_id', 'task_date_key', 'vehicle_id'])
 
     print("ETL process for fact_mecanotask completed.") 
+    
+    
+   # Transform fact_driver_tasks
+    fact_driver_tasks = transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dimension, rehla, dim_destinations)
 
+    # Create table for fact_driver_tasks and load data
+    create_fact_driver_tasks_table_query = """
+    CREATE TABLE IF NOT EXISTS fact_driver_tasks (
+        user_id INT,
+        task_id VARCHAR(255),
+        task_date_key DATE,
+        destination_id INT,
+        FOREIGN KEY (user_id) REFERENCES dimusers(user_id),
+        FOREIGN KEY (task_id) REFERENCES task_dimension(task_id),
+        FOREIGN KEY (task_date_key) REFERENCES time_dimension(date_key),
+        FOREIGN KEY (destination_id) REFERENCES dim_destinations(destination_id)
+    )
+    """
+    load_data(fact_driver_tasks, 'fact_driver_tasks', destination_engine, create_fact_driver_tasks_table_query)
+
+    print("ETL process for FactDriverTasks completed.")
+   
    
 
 if __name__ == "__main__":

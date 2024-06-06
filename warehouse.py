@@ -123,51 +123,81 @@ def generate_date_range_for_data_warehouse(relevant_tables):
     return dim_dates.rename(columns={'date': 'date_key'})
 
 
-def transform_fact_mecanotask(dim_users, mecano_tasks, time_dim, dim_vehicles):
+
+
+
+
+
+def transform_fact_mecanotask(dim_users, mecano_tasks, time_dim, dim_vehicles, task_dim):
     print("Transforming FactMecanotask...")
 
     # Filter mechanics from dim_users table
     mechanics = dim_users[dim_users['role'] == 'mecano'][['user_id', 'username']]
-
+    print("Mechanics:")
+    print(mechanics.head())
+    
     # Merge mechanics with mecano_tasks
     fact_mecanotask = mecano_tasks.merge(mechanics, left_on='id_mecano', right_on='user_id', how='inner')
-
-    # Print columns to debug
-    print("Columns after merging mecano_tasks and mechanics:")
-    print(fact_mecanotask.columns)
+    print("After merging mechanics with mecano_tasks:")
+    print(fact_mecanotask.head())
 
     # Convert task date to datetime and merge with time_dim
     fact_mecanotask['date'] = pd.to_datetime(fact_mecanotask['date'], errors='coerce').dt.date
     time_dim['date_key'] = pd.to_datetime(time_dim['date_key']).dt.date
     fact_mecanotask = fact_mecanotask.merge(time_dim[['date_key']], left_on='date', right_on='date_key', how='left')
-
-    # Print columns to debug
-    print("Columns after merging with time_dim:")
-    print(fact_mecanotask.columns)
+    print("After merging with time_dim:")
+    print(fact_mecanotask.head())
 
     # Merge with dim_vehicles to get the vehicle_id
     fact_mecanotask = fact_mecanotask.merge(dim_vehicles[['vehicle_id']], left_on='matricule', right_on='vehicle_id', how='left')
+    print("After merging with dim_vehicles:")
+    print(fact_mecanotask.head())
 
-    # Print columns to debug
-    print("Columns after merging with dim_vehicles:")
-    print(fact_mecanotask.columns)
+    # Check the contents of task_dim
+    print("Task Dimension:")
+    print(task_dim.head())
 
-    # Verify if 'task_id' is a column in fact_mecanotask
-    if 'task_id' in fact_mecanotask.columns:
-        # Select relevant columns
-        fact_mecanotask = fact_mecanotask[['user_id', 'task_id', 'date_key', 'vehicle_id']].rename(columns={
-            'task_id': 'task_id',
-            'date_key': 'task_date_key',
-            'vehicle_id': 'vehicle_id'
-        })
-    else:
-        print("Error: 'task_id' not in columns")
+    # Merge with task_dim to get the 'done' attribute
+    fact_mecanotask = fact_mecanotask.merge(task_dim[['task_id', 'done']], left_on='task_id', right_on='task_id', how='left')
+    print("After merging with task_dim:")
+    print(fact_mecanotask.head())
 
-    # Print columns to debug
+    # Check if the 'done_y' column exists after the merge
+    if 'done_y' not in fact_mecanotask.columns:
+        raise ValueError("'done_y' column not found in fact_mecanotask after merging with task_dim")
+
+    # Calculate total tasks completed per mechanic
+    total_tasks_per_mecano = fact_mecanotask[fact_mecanotask['done_y'] == 'yes'].groupby('user_id').size().reset_index(name='total_tasks')
+    print("Total tasks per mechanic:")
+    print(total_tasks_per_mecano.head())
+
+    # Calculate overall average tasks completed
+    overall_average_tasks = total_tasks_per_mecano['total_tasks'].mean()
+
+    # Merge total tasks back into fact_mecanotask
+    fact_mecanotask = fact_mecanotask.merge(total_tasks_per_mecano, left_on='user_id', right_on='user_id', how='left')
+    fact_mecanotask['average_tasks'] = overall_average_tasks
+
+    # Drop the 'done_y' column
+    fact_mecanotask = fact_mecanotask.drop(columns=['done_y'])
+
+    # Select relevant columns
+    fact_mecanotask = fact_mecanotask[['user_id', 'task_id', 'date_key', 'vehicle_id', 'total_tasks', 'average_tasks']].rename(columns={
+        'task_id': 'task_id',
+        'date_key': 'task_date_key',
+        'vehicle_id': 'vehicle_id'
+    })
+
+    # Print final columns to debug
     print("Final columns in fact_mecanotask:")
     print(fact_mecanotask.columns)
 
     return fact_mecanotask
+
+
+
+
+
 
 
 
@@ -250,7 +280,7 @@ def main_etl_process():
     print("Starting ETL process...")
 
     source_engine = create_engine_db('pfe')
-    destination_engine = create_engine_db('dwh3')
+    destination_engine = create_engine_db('dwh4')
 
     # Extract and transform tasks data
     mecano_tasks_query = "SELECT * FROM mecano_tasks"
@@ -366,19 +396,23 @@ def main_etl_process():
     load_data(vehicle_maintenance_fact, 'vehicle_maintenance_fact', destination_engine, create_vehicle_maintenance_fact_table_query, unique_columns=['vehicle_id', 'last_maintenance_date_key', 'next_maintenance_date_key', 'last_repared_at_key'])
 
    # Transform fact_mecanotask
-    fact_mecanotask = transform_fact_mecanotask(dim_users, mecano_tasks, time_dim, dim_vehicles)
+    fact_mecanotask = transform_fact_mecanotask(dim_users, mecano_tasks, time_dim, dim_vehicles,task_dimension)
 
     # Create table for fact_mecanotask and load data
     create_fact_mecanotask_table_query = """
-        CREATE TABLE IF NOT EXISTS fact_mecanotask (
-            user_id INT,
-            task_id VARCHAR(255),
-            task_date_key DATE,
-            vehicle_id VARCHAR(255),
-            FOREIGN KEY (user_id) REFERENCES dimusers(user_id),
-            FOREIGN KEY (task_date_key) REFERENCES time_dimension(date_key),
-            FOREIGN KEY (vehicle_id) REFERENCES dim_vehicles(vehicle_id)
-        )
+      CREATE TABLE IF NOT EXISTS fact_mecanotask (
+    user_id INT,
+    task_id VARCHAR(255),
+    task_date_key DATE,
+    vehicle_id VARCHAR(255),
+    total_tasks INT,
+    average_tasks FLOAT,
+    FOREIGN KEY (user_id) REFERENCES dimusers(user_id),
+    FOREIGN KEY (task_id) REFERENCES task_dimension(task_id),
+    FOREIGN KEY (task_date_key) REFERENCES time_dimension(date_key),
+    FOREIGN KEY (vehicle_id) REFERENCES dim_vehicles(vehicle_id)
+)
+
     """
     load_data(fact_mecanotask, 'fact_mecanotask', destination_engine, create_fact_mecanotask_table_query, unique_columns=['user_id', 'task_id', 'task_date_key', 'vehicle_id'])
 

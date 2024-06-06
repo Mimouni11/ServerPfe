@@ -1728,28 +1728,52 @@ def save_Rehla():
     km = request.form.get('km')
     
     # Connect to MySQL database
-    connection = mysql.connector.connect(**db_config)
-    cursor = connection.cursor()
+    try:
+        connection = mysql.connector.connect(**db_config)
+        cursor = connection.cursor()
+        
+        print(f"Connected to database for user: {username}")
+        
+        # Get the user's ID based on the username
+        query_get_id = "SELECT id FROM drivers WHERE username = %s"
+        cursor.execute(query_get_id, (username,))
+        user_id = cursor.fetchone()
+        
+        if user_id is None:
+            return f"Error: User {username} not found", 404
+        
+        user_id = user_id[0]  # Fetch the first column of the first row
+        
+        print(f"User ID for {username} is {user_id}")
+        
+        # Get the task_id from driver_tasks for the given user_id and today's date
+        today_date = date.today()  # Get today's date
+        query_get_task_id = "SELECT idtask FROM driver_tasks WHERE id_driver = %s AND Date = %s"
+        cursor.execute(query_get_task_id, (user_id, today_date))
+        task_id = cursor.fetchone()
+        
+        if task_id is None:
+            task_id = None
+        else:
+            task_id = task_id[0]  # Fetch the first column of the first row
+        
+        print(f"Task ID for user {username} on {today_date} is {task_id}")
+        
+        # Insert data into the rehla table
+        query_insert_rehla = "INSERT INTO rehla (id_D, date, destinations, km, id_task) VALUES (%s, %s, %s, %s, %s)"
+        cursor.execute(query_insert_rehla, (user_id, today_date, addresses, km, task_id))
+        
+        # Commit the transaction
+        connection.commit()
+        
+        print(f"Rehla entry saved for user {username}")
+        
+        return "Rehla saved successfully", 200
+    except Exception as e:
+        print(f"Error: {e}")
+        connection.rollback()  # Rollback the transaction if an error occurs
+        return f"Error: {e}", 500
     
-    # Get the user's ID based on the username
-    query_get_id = "SELECT id FROM drivers WHERE username = %s"
-    cursor.execute(query_get_id, (username,))
-    user_id = cursor.fetchone()[0]  # Fetch the first column of the first row
-    
-    # Insert data into the rehla table
-    today_date = date.today()  # Get today's date
-    query_insert_rehla = "INSERT INTO rehla (id_D, date, destinations, km) VALUES (%s, %s, %s, %s)"
-    cursor.execute(query_insert_rehla, (user_id, today_date, addresses, km))
-    
-    # Commit the transaction
-    connection.commit()
-    
-    # Close cursor and connection
-    cursor.close()
-    connection.close()
-    
-    return "Rehla saved successfully", 200
-
 
 
 
@@ -2007,4 +2031,4 @@ def users_with_most_activities():
 
 
 if __name__ == '__main__':
-    app.run(host='192.168.1.6', port=5001, debug=True)
+    app.run(host='192.168.1.165', port=5001, debug=True)

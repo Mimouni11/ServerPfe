@@ -32,6 +32,21 @@ def transform_dim_users(users):
     })
 
 
+
+def transform_dim_destinations(rehla):
+    print("Transforming DimDestinations...")
+
+    # Split destinations by comma and stack them vertically
+    destinations = rehla['destinations'].str.split(',', expand=True).stack().reset_index(drop=True).rename('destination')
+    
+    # Create a DataFrame from the stacked destinations
+    dim_destinations = pd.DataFrame(destinations)
+    
+    return dim_destinations
+
+
+
+
 def transform_dim_vehicles(trucks):
     print("Transforming DimVehicles...")
     print(trucks.head())  # Debug print to check the initial data structure
@@ -135,7 +150,12 @@ def transform_fact_mecanotask(dim_users, mecano_tasks, time_dim, dim_vehicles, t
     mechanics = dim_users[dim_users['role'] == 'mecano'][['user_id', 'username']]
     print("Mechanics:")
     print(mechanics.head())
-    
+
+    # Ensure mecano_tasks has unique entries
+    mecano_tasks = mecano_tasks.drop_duplicates(subset=['id_mecano', 'task_id'])
+    print("Unique Mecano Tasks:")
+    print(mecano_tasks.head())
+
     # Merge mechanics with mecano_tasks
     fact_mecanotask = mecano_tasks.merge(mechanics, left_on='id_mecano', right_on='user_id', how='inner')
     print("After merging mechanics with mecano_tasks:")
@@ -153,8 +173,9 @@ def transform_fact_mecanotask(dim_users, mecano_tasks, time_dim, dim_vehicles, t
     print("After merging with dim_vehicles:")
     print(fact_mecanotask.head())
 
-    # Check the contents of task_dim
-    print("Task Dimension:")
+    # Ensure task_dim has unique entries
+    task_dim = task_dim.drop_duplicates(subset=['task_id'])
+    print("Unique Task Dimension:")
     print(task_dim.head())
 
     # Merge with task_dim to get the 'done' attribute
@@ -205,11 +226,13 @@ def transform_fact_mecanotask(dim_users, mecano_tasks, time_dim, dim_vehicles, t
         'date_key': 'task_date_key'
     })
 
-    # Print final columns to debug
+    # Ensure final DataFrame has no duplicates
+    fact_mecanotask = fact_mecanotask.drop_duplicates()
     print("Final columns in fact_mecanotask:")
     print(fact_mecanotask.columns)
 
     return fact_mecanotask
+
 
 
 
@@ -311,7 +334,9 @@ def main_etl_process():
     trucks_query = "SELECT * FROM trucks"
     trucks = extract_data(trucks_query, source_engine)
     task_dimension = transform_dim_tasks(driver_tasks, mecano_tasks)
-
+# Extract and transform rehla data
+    rehla_query = "SELECT * FROM rehla"
+    rehla = extract_data(rehla_query, source_engine)
     # Define the create table query for task_dimension
     create_task_dimension_table_query = """
         CREATE TABLE IF NOT EXISTS task_dimension (
@@ -373,7 +398,14 @@ def main_etl_process():
      """
     load_data(dim_vehicles, 'dim_vehicles', destination_engine, create_dim_vehicles_table_query)
 
-
+    dim_destinations = transform_dim_destinations(rehla)
+    create_dim_destinations_table_query = """
+CREATE TABLE IF NOT EXISTS dim_destinations (
+    destination_id INT PRIMARY KEY AUTO_INCREMENT,
+    destination VARCHAR(255)
+)
+"""
+    load_data(dim_destinations, 'dim_destinations', destination_engine, create_dim_destinations_table_query)  
 
 
 
@@ -443,7 +475,7 @@ def main_etl_process():
 
     print("ETL process for fact_mecanotask completed.") 
 
-    
+   
 
 if __name__ == "__main__":
     main_etl_process()

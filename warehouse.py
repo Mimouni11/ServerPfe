@@ -162,27 +162,26 @@ def transform_fact_mecanotask(dim_users, mecano_tasks, time_dim, dim_vehicles, t
     print("After merging with task_dim:")
     print(fact_mecanotask.head())
 
-    # Check if the 'done_y' column exists after the merge
-    if 'done_y' not in fact_mecanotask.columns:
-        raise ValueError("'done_y' column not found in fact_mecanotask after merging with task_dim")
-
-    # Calculate total tasks completed per mechanic
-    total_tasks_per_mecano = fact_mecanotask[fact_mecanotask['done_y'] == 'yes'].groupby('user_id').size().reset_index(name='total_tasks')
-    print("Total tasks per mechanic:")
+    # Calculate total tasks per mechanic (both done and not done)
+    total_tasks_per_mecano = fact_mecanotask.groupby('user_id').size().reset_index(name='total_tasks')
+    print("Total tasks per mechanic (all):")
     print(total_tasks_per_mecano.head())
 
-    # Calculate overall average tasks completed
-    overall_average_tasks = total_tasks_per_mecano['total_tasks'].mean()
+    # Calculate total done tasks per mechanic
+    total_done_tasks_per_mecano = fact_mecanotask[fact_mecanotask['done_y'] == 'yes'].groupby('user_id').size().reset_index(name='total_done_tasks')
+    print("Total done tasks per mechanic:")
+    print(total_done_tasks_per_mecano.head())
 
-    # Merge total tasks back into fact_mecanotask
-    fact_mecanotask = fact_mecanotask.merge(total_tasks_per_mecano, left_on='user_id', right_on='user_id', how='left')
-    fact_mecanotask['average_tasks'] = overall_average_tasks
+    # Merge the total tasks and total done tasks back into fact_mecanotask
+    fact_mecanotask = fact_mecanotask.merge(total_tasks_per_mecano, on='user_id', how='left')
+    fact_mecanotask = fact_mecanotask.merge(total_done_tasks_per_mecano, on='user_id', how='left')
 
-    # Drop the 'done_y' column
-    fact_mecanotask = fact_mecanotask.drop(columns=['done_y'])
+    # Calculate the percentage of tasks done
+    fact_mecanotask['total_done_tasks'] = fact_mecanotask['total_done_tasks'].fillna(0)
+    fact_mecanotask['percentage_tasks_done'] = (fact_mecanotask['total_done_tasks'] / fact_mecanotask['total_tasks']) * 100
 
     # Select relevant columns
-    fact_mecanotask = fact_mecanotask[['user_id', 'task_id', 'date_key', 'vehicle_id', 'total_tasks', 'average_tasks']].rename(columns={
+    fact_mecanotask = fact_mecanotask[['user_id', 'task_id', 'date_key', 'vehicle_id', 'total_tasks', 'total_done_tasks', 'percentage_tasks_done']].rename(columns={
         'task_id': 'task_id',
         'date_key': 'task_date_key',
         'vehicle_id': 'vehicle_id'
@@ -193,6 +192,8 @@ def transform_fact_mecanotask(dim_users, mecano_tasks, time_dim, dim_vehicles, t
     print(fact_mecanotask.columns)
 
     return fact_mecanotask
+
+
 
 
 
@@ -400,13 +401,14 @@ def main_etl_process():
 
     # Create table for fact_mecanotask and load data
     create_fact_mecanotask_table_query = """
-      CREATE TABLE IF NOT EXISTS fact_mecanotask (
+     CREATE TABLE IF NOT EXISTS fact_mecanotask (
     user_id INT,
     task_id VARCHAR(255),
     task_date_key DATE,
     vehicle_id VARCHAR(255),
     total_tasks INT,
-    average_tasks FLOAT,
+    total_done_tasks INT,
+    percentage_tasks_done FLOAT,
     FOREIGN KEY (user_id) REFERENCES dimusers(user_id),
     FOREIGN KEY (task_id) REFERENCES task_dimension(task_id),
     FOREIGN KEY (task_date_key) REFERENCES time_dimension(date_key),

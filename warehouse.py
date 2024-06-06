@@ -249,12 +249,15 @@ def transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dim, reh
     print("Driver Tasks Dimension:")
     print(driver_tasks_dim.head())
 
-    # Merge driver tasks with rehla to get destination IDs
-    driver_tasks = driver_tasks.merge(rehla[['id_task', 'destinations']], left_on='task_id', right_on='id_task', how='inner')
+    # Merge driver tasks with rehla to get destination IDs and KM covered
+    driver_tasks = driver_tasks.merge(rehla[['id_task', 'destinations', 'KM']], left_on='task_id', right_on='id_task', how='inner')
     print("After merging driver tasks with rehla:")
     print(driver_tasks.head())
 
-    # Split destinations and get the destination IDs
+    # Aggregate KM_covered at the task level
+    driver_tasks['KM_covered'] = driver_tasks.groupby('task_id')['KM'].transform('sum')
+    
+    # Split destinations
     driver_tasks['destination'] = driver_tasks['destinations'].str.split(',')
     driver_tasks = driver_tasks.explode('destination').reset_index(drop=True)
     print("After splitting destinations:")
@@ -286,8 +289,8 @@ def transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dim, reh
     print("After merging with time_dim:")
     print(driver_tasks.head())
 
-    # Select relevant columns for the final fact table
-    fact_driver_tasks = driver_tasks[['user_id', 'task_id', 'date_key', 'destination_id']].rename(columns={
+    # Select relevant columns for the final fact table, ensuring no duplicates
+    fact_driver_tasks = driver_tasks[['user_id', 'task_id', 'date_key', 'destination_id', 'KM_covered']].rename(columns={
         'date_key': 'task_date_key',
         'destination_id': 'destination_id'
     })
@@ -546,16 +549,17 @@ def main_etl_process():
     # Create table for fact_driver_tasks and load data
     create_fact_driver_tasks_table_query = """
     CREATE TABLE IF NOT EXISTS fact_driver_tasks (
-        user_id INT,
-        task_id VARCHAR(255),
-        task_date_key DATE,
-        destination_id INT,
-        FOREIGN KEY (user_id) REFERENCES dimusers(user_id),
-        FOREIGN KEY (task_id) REFERENCES task_dimension(task_id),
-        FOREIGN KEY (task_date_key) REFERENCES time_dimension(date_key),
-        FOREIGN KEY (destination_id) REFERENCES dim_destinations(destination_id)
-    )
-    """
+    user_id INT,
+    task_id VARCHAR(255),
+    task_date_key DATE,
+    destination_id INT,
+    KM_covered FLOAT,
+    FOREIGN KEY (user_id) REFERENCES dimusers(user_id),
+    FOREIGN KEY (task_id) REFERENCES task_dimension(task_id),
+    FOREIGN KEY (task_date_key) REFERENCES time_dimension(date_key),
+    FOREIGN KEY (destination_id) REFERENCES dim_destinations(destination_id)
+)
+"""
     load_data(fact_driver_tasks, 'fact_driver_tasks', destination_engine, create_fact_driver_tasks_table_query)
 
     print("ETL process for FactDriverTasks completed.")

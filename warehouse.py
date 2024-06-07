@@ -239,8 +239,8 @@ def transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dim, reh
     print("Driver Tasks Dimension:")
     print(driver_tasks_dim.head())
 
-    # Merge driver tasks with rehla to get KM covered
-    driver_tasks = driver_tasks.merge(rehla[['id_task', 'KM']], left_on='task_id', right_on='id_task', how='inner')
+    # Merge driver tasks with rehla to get KM covered and destinations
+    driver_tasks = driver_tasks.merge(rehla[['id_task', 'KM', 'destinations']], left_on='task_id', right_on='id_task', how='inner')
     print("After merging driver tasks with rehla:")
     print(driver_tasks.head())
 
@@ -260,7 +260,7 @@ def transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dim, reh
     print(driver_tasks.head())
 
     # Select relevant columns for the final fact table, ensuring no duplicates
-    fact_driver_tasks = driver_tasks[['user_id', 'task_id', 'date_key', 'KM_covered']].rename(columns={
+    fact_driver_tasks = driver_tasks[['user_id', 'task_id', 'date_key', 'KM_covered', 'destinations']].rename(columns={
         'date_key': 'task_date_key'
     })
 
@@ -272,6 +272,7 @@ def transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dim, reh
     print(fact_driver_tasks)
 
     return fact_driver_tasks
+
 
 
 
@@ -516,6 +517,7 @@ def main_etl_process():
     task_date_key DATE,
     
     KM_covered FLOAT,
+    destinations VARCHAR(255),
     PRIMARY KEY (task_id),
     FOREIGN KEY (user_id) REFERENCES dimusers(user_id),
     FOREIGN KEY (task_id) REFERENCES task_dimension(task_id),

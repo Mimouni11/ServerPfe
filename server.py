@@ -2146,20 +2146,22 @@ def driver_tasks():
         u.username,
         t.task_id,
         t.description AS task_description,
-        f.km_covered,
-        f.destination,
+        f.KM_covered,
+        f.destinations,
         f.vehicle_id,
-        f.task_date
+        f.task_date_key
     FROM 
         fact_driver_tasks f
     JOIN 
         task_dimension t ON f.task_id = t.task_id
     JOIN 
-        dim_users u ON f.user_id = u.user_id
+        dimusers u ON f.user_id = u.user_id
     WHERE 
         t.task_for = 'driver';
     """
     result = pd.read_sql(query, engine)
+    print('aaaaaaaaaaaaaaaa')
+    print(result)
     return jsonify(result.to_dict(orient='records'))
 
 

@@ -72,27 +72,31 @@ def transform_dim_tasks(driver_tasks, mecano_tasks):
 
 def load_data(df, table_name, engine, create_table_query=None, unique_columns=None):
     try:
+        # Create table if creation query is provided
         if create_table_query:
             with engine.connect() as conn:
                 conn.execute(create_table_query)
                 print(f"Table {table_name} created or already exists.")
 
+        # Handle duplicates based on unique columns
         if unique_columns:
-            # Extract existing data to check for duplicates
-            query = f"SELECT {', '.join(unique_columns)} FROM {table_name}"
-            existing_data = pd.read_sql(query, engine)
-
-            # Merge to find duplicates and exclude them
-            df = df.merge(existing_data, on=unique_columns, how='left', indicator=True)
-            df = df[df['_merge'] == 'left_only'].drop(columns=['_merge'])
-
-        if create_table_query:
-            print(f"DataFrame info for {table_name}:")
-            print(df.info())
-            print(f"Checking for NaN values in {table_name}:")
-            print(df.isnull().sum())
-
-        df.to_sql(table_name.lower(), engine, if_exists='append' if create_table_query else 'replace', index=False)
+            # Extract existing unique data to check for duplicates
+            with engine.connect() as conn:
+                query = f"SELECT {', '.join(unique_columns)} FROM {table_name}"
+                existing_data = pd.read_sql(query, conn)
+                
+                # Merge to find duplicates and exclude them
+                df = df.merge(existing_data, on=unique_columns, how='left', indicator=True)
+                df = df[df['_merge'] == 'left_only'].drop(columns=['_merge'])
+        
+        # Logging DataFrame information
+        print(f"DataFrame info for {table_name}:")
+        print(df.info())
+        print(f"Checking for NaN values in {table_name}:")
+        print(df.isnull().sum())
+        
+        # Insert data into the table
+        df.to_sql(table_name, engine, if_exists='append', index=False)
         print(f"Data loaded into {table_name} successfully.")
     except Exception as e:
         print(f"Error loading data into {table_name}: {e}")
@@ -524,12 +528,13 @@ def main_etl_process():
     KM_covered FLOAT,
     destinations VARCHAR(255),
     vehicle_id VARCHAR(255),
-    PRIMARY KEY (task_id),
+    PRIMARY KEY (user_id, task_id, task_date_key),
     FOREIGN KEY (user_id) REFERENCES dimusers(user_id),
     FOREIGN KEY (task_id) REFERENCES task_dimension(task_id),
     FOREIGN KEY (task_date_key) REFERENCES time_dimension(date_key),
     FOREIGN KEY (vehicle_id) REFERENCES dim_vehicles(vehicle_id)
 )
+
 
 """
     load_data(fact_driver_tasks, 'fact_driver_tasks', destination_engine, create_fact_driver_tasks_table_query)

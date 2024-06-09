@@ -226,7 +226,7 @@ def transform_fact_mecanotask(dim_users, mecano_tasks, time_dim, dim_vehicles, t
 
 
 
-def transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dim, rehla):
+def transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dim, rehla, dim_vehicles):
     print("Transforming FactDriverTasks...")
 
     # Filter drivers from dim_users table
@@ -259,8 +259,13 @@ def transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dim, reh
     print("After merging with time_dim:")
     print(driver_tasks.head())
 
+    # Merge with dim_vehicles to get vehicle ID
+    driver_tasks = driver_tasks.merge(dim_vehicles[['vehicle_id', 'model']], left_on='matricule', right_on='vehicle_id', how='inner')
+    print("After merging with dim_vehicles:")
+    print(driver_tasks.head())
+
     # Select relevant columns for the final fact table, ensuring no duplicates
-    fact_driver_tasks = driver_tasks[['user_id', 'task_id', 'date_key', 'KM_covered', 'destinations']].rename(columns={
+    fact_driver_tasks = driver_tasks[['user_id', 'task_id', 'date_key', 'KM_covered', 'destinations', 'vehicle_id']].rename(columns={
         'date_key': 'task_date_key'
     })
 
@@ -272,6 +277,7 @@ def transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dim, reh
     print(fact_driver_tasks)
 
     return fact_driver_tasks
+
 
 
 
@@ -507,7 +513,7 @@ def main_etl_process():
     
     
    # Transform fact_driver_tasks
-    fact_driver_tasks = transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dimension, rehla)
+    fact_driver_tasks = transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dimension, rehla, dim_vehicles)
 
     # Create table for fact_driver_tasks and load data
     create_fact_driver_tasks_table_query = """
@@ -515,15 +521,16 @@ def main_etl_process():
     user_id INT,
     task_id VARCHAR(255),
     task_date_key DATE,
-    
     KM_covered FLOAT,
     destinations VARCHAR(255),
+    vehicle_id VARCHAR(255),
     PRIMARY KEY (task_id),
     FOREIGN KEY (user_id) REFERENCES dimusers(user_id),
     FOREIGN KEY (task_id) REFERENCES task_dimension(task_id),
-    FOREIGN KEY (task_date_key) REFERENCES time_dimension(date_key)
-    
+    FOREIGN KEY (task_date_key) REFERENCES time_dimension(date_key),
+    FOREIGN KEY (vehicle_id) REFERENCES dim_vehicles(vehicle_id)
 )
+
 """
     load_data(fact_driver_tasks, 'fact_driver_tasks', destination_engine, create_fact_driver_tasks_table_query)
 

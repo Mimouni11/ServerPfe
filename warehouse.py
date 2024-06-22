@@ -230,23 +230,31 @@ def transform_fact_mecanotask(dim_users, mecano_tasks, time_dim, dim_vehicles, t
 
 
 
+
+import time
+
 def transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dim, rehla, dim_vehicles):
     print("Transforming FactDriverTasks...")
+
+    start_time = time.time()
 
     # Filter drivers from dim_users table
     drivers = dim_users[dim_users['role'] == 'driver'][['user_id', 'username']]
     print("Drivers:")
     print(drivers.head())
+    print(f"Number of drivers: {len(drivers)}")
 
     # Filter driver tasks from task_dim
     driver_tasks_dim = task_dim[task_dim['task_for'] == 'driver']
     print("Driver Tasks Dimension:")
     print(driver_tasks_dim.head())
+    print(f"Number of driver tasks in dimension: {len(driver_tasks_dim)}")
 
     # Merge driver tasks with rehla to get KM covered and destinations
     driver_tasks = driver_tasks.merge(rehla[['id_task', 'KM', 'destinations']], left_on='task_id', right_on='id_task', how='inner')
     print("After merging driver tasks with rehla:")
     print(driver_tasks.head())
+    print(f"Number of driver tasks after merging with rehla: {len(driver_tasks)}")
 
     # Aggregate KM_covered at the task level
     driver_tasks['KM_covered'] = driver_tasks.groupby('task_id')['KM'].transform('sum')
@@ -255,6 +263,7 @@ def transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dim, reh
     driver_tasks = driver_tasks.merge(drivers, left_on='id_driver', right_on='user_id', how='inner')
     print("After merging with drivers:")
     print(driver_tasks.head())
+    print(f"Number of driver tasks after merging with drivers: {len(driver_tasks)}")
 
     # Convert task date to datetime and merge with time_dim
     driver_tasks['date'] = pd.to_datetime(driver_tasks['date'], errors='coerce').dt.date
@@ -262,11 +271,17 @@ def transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dim, reh
     driver_tasks = driver_tasks.merge(time_dim[['date_key']], left_on='date', right_on='date_key', how='left')
     print("After merging with time_dim:")
     print(driver_tasks.head())
+    print(f"Number of driver tasks after merging with time_dim: {len(driver_tasks)}")
 
     # Merge with dim_vehicles to get vehicle ID
     driver_tasks = driver_tasks.merge(dim_vehicles[['vehicle_id', 'model']], left_on='matricule', right_on='vehicle_id', how='inner')
     print("After merging with dim_vehicles:")
     print(driver_tasks.head())
+    print(f"Number of driver tasks after merging with dim_vehicles: {len(driver_tasks)}")
+
+    # Calculate additional measures
+    total_km = driver_tasks['KM_covered'].sum()
+    total_tasks = len(driver_tasks)
 
     # Select relevant columns for the final fact table, ensuring no duplicates
     fact_driver_tasks = driver_tasks[['user_id', 'task_id', 'date_key', 'KM_covered', 'destinations', 'vehicle_id']].rename(columns={
@@ -275,10 +290,21 @@ def transform_fact_driver_tasks(dim_users, driver_tasks, time_dim, task_dim, reh
 
     # Ensure the final DataFrame has unique combinations of the foreign keys
     fact_driver_tasks = fact_driver_tasks.drop_duplicates(subset=['user_id', 'task_id', 'task_date_key'])
+
+    # Add measures to the final fact table
+    fact_driver_tasks['total_km_covered'] = total_km
+    fact_driver_tasks['total_tasks'] = total_tasks
+    fact_driver_tasks['average_km_per_task'] = total_km / total_tasks if total_tasks > 0 else 0
+
     print("Final columns in fact_driver_tasks:")
     print(fact_driver_tasks.columns)
     print("Final fact_driver_tasks:")
     print(fact_driver_tasks)
+    print(f"Number of records in final fact_driver_tasks: {len(fact_driver_tasks)}")
+
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Transformation completed in {elapsed_time:.2f} seconds")
 
     return fact_driver_tasks
 
@@ -521,21 +547,22 @@ def main_etl_process():
 
     # Create table for fact_driver_tasks and load data
     create_fact_driver_tasks_table_query = """
-    CREATE TABLE IF NOT EXISTS fact_driver_tasks (
+   CREATE TABLE IF NOT EXISTS fact_driver_tasks (
     user_id INT,
     task_id VARCHAR(255),
     task_date_key DATE,
     KM_covered FLOAT,
     destinations VARCHAR(255),
     vehicle_id VARCHAR(255),
+    total_km_covered FLOAT,
+    total_tasks INT,
+    average_km_per_task FLOAT,
     PRIMARY KEY (user_id, task_id, task_date_key),
     FOREIGN KEY (user_id) REFERENCES dimusers(user_id),
     FOREIGN KEY (task_id) REFERENCES task_dimension(task_id),
     FOREIGN KEY (task_date_key) REFERENCES time_dimension(date_key),
     FOREIGN KEY (vehicle_id) REFERENCES dim_vehicles(vehicle_id)
 )
-
-
 """
     load_data(fact_driver_tasks, 'fact_driver_tasks', destination_engine, create_fact_driver_tasks_table_query)
 

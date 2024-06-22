@@ -34,10 +34,10 @@ db_config = {
 }
 
 
-EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_HOST = 'smtp.office365.com'
 EMAIL_PORT = 587
-EMAIL_USER = 'amberelmedina1@gmail.com'
-EMAIL_PASSWORD = 'cnlr aouk xqbl wayb'
+EMAIL_USER = 'sawkeji.inc@outlook.com'
+EMAIL_PASSWORD = 'xmsxoxhmrietjpwb'
 
 
 def send_email(receiver_email, subject, message_body, attachment_path=None):
@@ -191,21 +191,31 @@ def authenticate_user(username, password):
         connection = mysql.connector.connect(**db_config)
         cursor = connection.cursor()
 
-       
+        # Query to check username and password
         query = "SELECT Role FROM users WHERE Username = %s AND Password = %s"
         cursor.execute(query, (username, password))
 
-        
         user_data = cursor.fetchone()
         if user_data:
             role = user_data[0]
-            return True, role
+            if role == 'driver':
+                # Query to get the type for the driver
+                type_query = "SELECT Type FROM drivers WHERE Username = %s"
+                cursor.execute(type_query, (username,))
+                type_data = cursor.fetchone()
+                if type_data:
+                    user_type = type_data[0]
+                else:
+                    user_type = None
+                return True, role, user_type
+            else:
+                return True, role, None
         else:
-            return False, None
+            return False, None, None
 
     except mysql.connector.Error as error:
         print("Error: {}".format(error))
-        return False, None
+        return False, None, None
 
     finally:
         if 'connection' in locals() and connection.is_connected():
@@ -637,7 +647,7 @@ def search_matricule():
 
 
 @app.route('/authenticate', methods=['POST'])
-@cross_origin(supports_credentials=True)  # Apply decorator to specific route
+@cross_origin(supports_credentials=True)
 def authenticate():
     if request.method == 'POST':
         data = request.get_json()
@@ -645,13 +655,20 @@ def authenticate():
         password = data.get('password')
 
         # Call the authenticate_user function
-        auth_status, user_role = authenticate_user(username, password)
+        auth_status, user_role, user_type = authenticate_user(username, password)
         if auth_status:
-            return jsonify({'status': 'success', 'message': 'Succès d"authentification', 'role': user_role})
             session['username'] = username  
-            session['user_role']=user_role
+            session['user_role'] = user_role
+            response = {'status': 'success', 'message': 'Succès d"authentification', 'role': user_role}
+            if user_role == 'driver':
+                response['type'] = user_type  # Add the actual type for drivers
+            return jsonify(response)
         else:
             return jsonify({'status': 'failure', 'message': 'Échec d"Authentification'})
+
+
+
+
 
 @app.route('/admin/authenticate', methods=['POST'])
 @cross_origin(supports_credentials=True)
@@ -886,8 +903,17 @@ def confirm_task():
 @cross_origin(supports_credentials=True)
 def get_tasks_for_scanned_content():
     try:
-        # Get the scanned content from the request
+        # Get the scanned content and username from the request
         content = request.args.get('content')
+        username = request.args.get('username')
+
+        if not username:
+            logging.error("Username is missing from the request")
+            return jsonify({'error': 'Username is required'}), 400
+
+        if not content:
+            logging.error("Content is missing from the request")
+            return jsonify({'error': 'Content is required'}), 400
 
         # Split the content string into individual primary keys
         primary_keys = content.split(',')
@@ -896,36 +922,100 @@ def get_tasks_for_scanned_content():
         connection = mysql.connector.connect(**db_config)
         cursor = connection.cursor()
 
+        # Get the driver's ID from the drivers table using the username
+        cursor.execute("SELECT id FROM drivers WHERE username = %s", (username,))
+        driver_id_result = cursor.fetchone()
+        
+        if not driver_id_result:
+            logging.error(f"Driver not found for username: {username}")
+            return jsonify({'error': 'Driver not found'}), 404
+
+        driver_id = driver_id_result[0]
+
         # Initialize an empty list to store tasks
         tasks_list = []
 
-        # Search for tasks related to each primary key
+        # Get today's date in the format YYYY-MM-DD
+        today_date = datetime.now().strftime('%Y-%m-%d')
+
+        # Search for tasks related to each primary key and the driver's ID
         for key in primary_keys:
-            # Search for tasks related to the current primary key
             query = """
-            SELECT * FROM driver_tasks WHERE idtask = %s 
+            SELECT * FROM driver_tasks WHERE idtask = %s AND id_driver = %s AND DATE(date) = %s
             """
-            cursor.execute(query, (key,))
+            cursor.execute(query, (key, driver_id, today_date))
             tasks = cursor.fetchall()
 
             # Append tasks to the tasks_list
             for task in tasks:
                 tasks_list.append({
-                    
-                      # Convert date to string if needed
-                    'task': task[2],
-                    'matricule':task[4]
-
+                    'task': task[2],  # Assuming task details are in the third column
+                    'matricule': task[4]  # Assuming matricule is in the fifth column
                 })
 
+        cursor.close()
+        connection.close()
+
         return jsonify(tasks_list)
+    except mysql.connector.Error as e:
+        logging.error(f"MySQL Error: {e}")
+        return jsonify({'error': f'MySQL Error: {str(e)}'}), 500
     except Exception as e:
+        logging.error(f"Error: {e}")
         return jsonify({'error': str(e)}), 500
 
 
 
 
+@app.route('/get-matricule', methods=['GET'])
+@cross_origin(supports_credentials=True)
+def get_matricule():
+    try:
+        # Get the username from the request
+        username = request.args.get('username')
 
+        if not username:
+            logging.error("Username is missing from the request")
+            return jsonify({'error': 'Username is required'}), 400
+
+        # Connect to the database
+        connection = mysql.connector.connect(**db_config)
+        cursor = connection.cursor()
+
+        # Get the driver's ID from the drivers table using the username
+        cursor.execute("SELECT id FROM drivers WHERE username = %s", (username,))
+        driver_id_result = cursor.fetchone()
+        
+        if not driver_id_result:
+            logging.error(f"Driver not found for username: {username}")
+            return jsonify({'error': 'Driver not found'}), 404
+
+        driver_id = driver_id_result[0]
+
+        # Get today's date in the format YYYY-MM-DD
+        today_date = datetime.now().strftime('%Y-%m-%d')
+
+        # Search for the matricule in the driver tasks table using the driver's ID and today's date
+        query = """
+        SELECT matricule FROM driver_tasks WHERE id_driver = %s AND DATE(date) = %s
+        """
+        cursor.execute(query, (driver_id, today_date))
+        matricule_result = cursor.fetchone()
+
+        cursor.close()
+        connection.close()
+
+        if not matricule_result:
+            logging.error(f"No tasks found for driver ID: {driver_id} on date: {today_date}")
+            return jsonify({'error': 'No tasks found for today'}), 404
+
+        matricule = matricule_result[0]
+
+        return jsonify({'matricule': matricule})
+
+    except Exception as e:
+        logging.error(f"An error occurred: {e}")
+        return jsonify({'error': 'An error occurred'}), 500
 
 
 
@@ -1867,8 +1957,64 @@ def get_monthly_distance():
 
 
 
+@app.route('/mechanicTaskCounts', methods=['GET'])
+def mechanic_task_counts():
+    username = request.args.get('username')
+    connection = mysql.connector.connect(**db_config)
+    cursor = connection.cursor()
+
+    # Get the mechanic ID based on the username
+    query_get_id = "SELECT id FROM mecano WHERE name = %s"
+    cursor.execute(query_get_id, (username,))
+    user_id = cursor.fetchone()
+
+    if user_id:
+        user_id = user_id[0]
+
+        # Get the counts of maintenance and repair tasks for the mechanic
+        query_get_task_counts = """
+            SELECT task_type, COUNT(*) AS count
+            FROM mecano_tasks
+            WHERE id_mecano = %s
+            GROUP BY task_type
+        """
+        cursor.execute(query_get_task_counts, (user_id,))
+        result = cursor.fetchall()
+
+        task_counts = [{"task_type": row[0], "count": row[1]} for row in result]
+
+        cursor.close()
+        connection.close()
+
+        return jsonify(task_counts), 200
+    else:
+        cursor.close()
+        connection.close()
+        return jsonify({'message': 'User not found'}), 404
 
 
+@app.route('/taskDoneRatio', methods=['GET'])
+def task_done_ratio():
+    connection = mysql.connector.connect(**db_config)
+    cursor = connection.cursor()
+
+    # Query to get the ratio of done tasks per date
+    query_get_done_ratio = """
+        SELECT date,
+               SUM(CASE WHEN done = 'yes' THEN 1 ELSE 0 END) / COUNT(*) AS done_ratio
+        FROM mecano_tasks
+        GROUP BY date
+        ORDER BY date
+    """
+    cursor.execute(query_get_done_ratio)
+    result = cursor.fetchall()
+
+    done_ratios = [{"date": row[0], "done_ratio": row[1]} for row in result]
+
+    cursor.close()
+    connection.close()
+
+    return jsonify(done_ratios), 200
 
 
 @app.route('/getDestinationCounts', methods=['GET'])
@@ -2164,7 +2310,135 @@ def driver_tasks():
     print(result)
     return jsonify(result.to_dict(orient='records'))
 
+@app.route('/total-km-covered', methods=['GET'])
+@cross_origin(supports_credentials=True)
+def total_km_covered():
+    query = """
+    SELECT 
+        f.user_id,
+        u.username,
+        SUM(f.KM_covered) AS total_km_covered
+    FROM 
+        fact_driver_tasks f
+    JOIN 
+        dimusers u ON f.user_id = u.user_id
+    GROUP BY 
+        f.user_id, u.username
+    """
+    result = pd.read_sql(query, engine)
+    return jsonify(result.to_dict(orient='records'))
+
+
+from collections import Counter
+@app.route('/destinations-count', methods=['GET'])
+@cross_origin(supports_credentials=True)
+
+def destinations_count():
+    query = "SELECT destinations FROM fact_driver_tasks;"
+    df = pd.read_sql(query, engine)
+
+    # Flatten and count destinations
+    all_destinations = []
+    for destinations in df['destinations']:
+        if destinations:
+            all_destinations.extend(destinations.split(','))
+
+    destination_counts = Counter(all_destinations)
+    result = [{"destination": dest, "count": count} for dest, count in destination_counts.items()]
+
+    return jsonify(result)
+# Mecano fact endpoints -------------------------------------------
+
+
+def execute_query(query):
+    with engine.connect() as connection:
+        result = pd.read_sql(query, connection)
+    return result.to_dict(orient='records')
+
+
+
+
+@app.route('/mechanic-performance', methods=['GET'])
+@cross_origin(supports_credentials=True)
+
+def mechanic_performance():
+    query = """
+    SELECT 
+        f.user_id,
+        u.username,
+        f.total_tasks,
+        f.total_done_tasks,
+        f.percentage_tasks_done
+    FROM 
+        fact_mecanotask f
+    JOIN 
+        dimusers u ON f.user_id = u.user_id
+    GROUP BY 
+        f.user_id, u.username, f.total_tasks, f.total_done_tasks, f.percentage_tasks_done
+    """
+    result = execute_query(query)
+    return jsonify(result)
+
+@app.route('/vehicle-model-performance', methods=['GET'])
+@cross_origin(supports_credentials=True)
+
+def vehicle_model_performance():
+    query = """
+    SELECT 
+    f.user_id,
+    u.username,
+    v.model AS vehicle_model,
+    f.tasks_done_per_model,
+    f.total_tasks_per_model,
+    f.percentage_tasks_done_per_model
+FROM 
+    fact_mecanotask f
+JOIN 
+    dimusers u ON f.user_id = u.user_id
+JOIN 
+    dim_vehicles v ON f.vehicle_id = v.vehicle_id
+GROUP BY 
+    f.user_id, u.username, v.model, f.tasks_done_per_model, f.total_tasks_per_model, f.percentage_tasks_done_per_model
+"""
+    result = execute_query(query)
+    return jsonify(result)
+
+@app.route('/task-details', methods=['GET'])
+@cross_origin(supports_credentials=True)
+
+def task_details():
+    query = """
+    SELECT 
+        t.task_id,
+        t.description,
+        t.task_for,
+        t.task_type,
+        t.done
+    FROM 
+        task_dimension t
+        WHERE t.task_for= 'mecano'
+    """
+    result = execute_query(query)
+    return jsonify(result)
+
+@app.route('/tasks-done-over-time', methods=['GET'])
+@cross_origin(supports_credentials=True)
+
+def tasks_done_over_time():
+    query = """
+    SELECT 
+        f.task_date_key,
+        COUNT(CASE WHEN f.total_done_tasks > 0 THEN 1 END) AS done_tasks,
+        COUNT(*) AS total_tasks
+    FROM 
+        fact_mecanotask f
+    GROUP BY 
+        f.task_date_key
+    """
+    result = execute_query(query)
+    return jsonify(result)
+
 
 
 if __name__ == '__main__':
-    app.run(host='192.168.1.199', port=5001, debug=True)
+    app.run(host='172.20.10.13', port=5001, debug=True)
